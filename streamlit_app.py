@@ -16,7 +16,7 @@ import yfinance as yf
 from datetime import datetime
 
 st.set_page_config(page_title="🚀 Heston Full Pipeline | Advanced Options Analytics", layout="wide")
-st.title("🚀 Pipeline Heston Complet: Market Data → NN Calibration → Monte Carlo → IV Surfaces")
+st.title("🚀 Pipeline Heston Complet: Market Data → Heston params NN Calibration → Monte Carlo pricing → IV Surfaces from Carr-Madan")
 st.write(
     "**Analyse complète de volatilité stochastique en une seule interface !** "
     "\n1️⃣ Téléchargement des données de marché en temps réel depuis yfinance "
