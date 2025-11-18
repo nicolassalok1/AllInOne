@@ -14,12 +14,13 @@ import streamlit as st
 import torch
 import yfinance as yf
 
-st.set_page_config(page_title="Heston vs Black-Scholes Heatmaps & IVs", layout="wide")
-st.title("Heston Calibration (yfinance) → Heatmaps & IV Surfaces")
+st.set_page_config(page_title="🎯 Heston vs Black-Scholes | Options Analytics", layout="wide")
+st.title("⚡ Calibration Heston en Temps Réel | Modélisation d'Options Avancée")
 st.write(
-    "Télécharge des options via `yfinance`, calibre Heston sur les calls avec PyTorch, puis compare "
-    "les heatmaps Call/Put Heston avec celles de Black-Scholes. Ajoute aussi les surfaces d'IV "
-    "Market, BS et Heston (calls & puts) sur les strikes observés."
+    "**Explorez la volatilité stochastique avec le modèle Heston !** "
+    "\nTéléchargez des données d'options en direct, calibrez automatiquement les paramètres Heston via PyTorch, "
+    "et visualisez instantanément les prix théoriques et surfaces de volatilité implicite. "
+    "\nComparez Heston vs Black-Scholes sur des heatmaps interactives et découvrez le smile de volatilité."
 )
 
 # Import du module Heston torch
@@ -175,10 +176,12 @@ def params_from_calib(calib: dict[str, float]) -> HestonParams:
 
 
 def bs_price(S0: float, K: float, T: float, vol: float, r: float) -> float:
-    if T <= 0.0 or vol <= 0.0:
+    if T <= 0.0 or vol <= 0.0 or S0 <= 0.0 or K <= 0.0:
         return max(0.0, S0 - K * math.exp(-r * T))
     sqrt_T = math.sqrt(T)
     v = vol * sqrt_T
+    if S0 <= 0.0 or K <= 0.0:
+        return 0.0
     d1 = (math.log(S0 / K) + (r + 0.5 * vol * vol) * T) / v
     d2 = d1 - v
     nd1 = 0.5 * (1.0 + math.erf(d1 / math.sqrt(2.0)))
@@ -210,7 +213,7 @@ def implied_vol(price: float, S0: float, K: float, T: float, r: float, tol: floa
 
 
 def bs_price_option(S0: float, K: float, T: float, vol: float, r: float, option_type: str) -> float:
-    if T <= 0.0 or vol <= 0.0:
+    if T <= 0.0 or vol <= 0.0 or S0 <= 0.0 or K <= 0.0:
         intrinsic_call = max(0.0, S0 - K * math.exp(-r * T))
         intrinsic_put = max(0.0, K * math.exp(-r * T) - S0)
         return intrinsic_call if option_type == "call" else intrinsic_put
@@ -394,158 +397,147 @@ with st.sidebar:
     max_quotes = 300
     max_iters = 80
     lr = 5e-3
-    heatmap_span = st.number_input("Écart autour de S₀ (±)", min_value=10.0, max_value=200.0, value=100.0, step=5.0)
+    heatmap_span = st.number_input("Écart autour de S₀ (±)", min_value=10.0, max_value=200.0, value=10.0, step=5.0)
     heatmap_points = st.slider("Points par axe", min_value=5, max_value=31, value=21, step=2)
     heatmap_maturity = st.number_input("Maturité heatmap (années)", min_value=0.1, max_value=5.0, value=1.0, step=0.1)
-    run_button = st.button("Télécharger, calibrer & comparer")
+    run_button = st.button("Télécharger & calibrer")
 
 
-if run_button:
-    if not ticker:
-        st.warning("Merci de renseigner un ticker.")
-    else:
-        try:
-            calls_df = download_options(ticker, "call", years_ahead=years_ahead)
-            puts_df = download_options(ticker, "put", years_ahead=years_ahead)
-            st.write(f"{len(calls_df)} calls et {len(puts_df)} puts téléchargés pour {ticker}.")
-            S0_ref = float(calls_df["S0"].median())
+if run_button and ticker:
+    try:
+        calls_df = download_options(ticker, "call", years_ahead=years_ahead)
+        puts_df = download_options(ticker, "put", years_ahead=years_ahead)
+        st.write(f"{len(calls_df)} calls et {len(puts_df)} puts téléchargés pour {ticker}.")
+        S0_ref = float(calls_df["S0"].median())
 
-            progress_bar = st.progress(0.0, text="Calibration Heston...")
-            log_box = st.empty()
-            log_messages: list[str] = []
+        progress_bar = st.progress(0.0, text="Calibration Heston...")
+        log_box = st.empty()
+        log_messages: list[str] = []
 
-            def progress_cb(iter_idx: int, total: int, loss_val: float) -> None:
-                fraction = (iter_idx + 1) / total
-                progress_bar.progress(fraction, text=f"Calibration... loss={loss_val:.3e}")
+        def progress_cb(iter_idx: int, total: int, loss_val: float) -> None:
+            fraction = (iter_idx + 1) / total
+            progress_bar.progress(fraction, text=f"Calibration... loss={loss_val:.3e}")
 
-            def log_cb(iter_idx: int, loss_val: float) -> None:
-                log_messages.append(f"Iter {iter_idx:03d} | loss = {loss_val:.6e}")
-                log_box.text("\n".join(log_messages[-10:]))
+        def log_cb(iter_idx: int, loss_val: float) -> None:
+            log_messages.append(f"Iter {iter_idx:03d} | loss = {loss_val:.6e}")
+            log_box.text("\n".join(log_messages[-10:]))
 
-            calib, history, summary = calibrate_heston_from_calls(
-                calls_df,
-                r=rf_rate,
-                q=0.0,
-                max_points=max_quotes,
-                max_iters=max_iters,
-                lr=lr,
-                progress_callback=progress_cb,
-                log_callback=log_cb,
+        calib, history, summary = calibrate_heston_from_calls(
+            calls_df,
+            r=rf_rate,
+            q=0.0,
+            max_points=max_quotes,
+            max_iters=max_iters,
+            lr=lr,
+            progress_callback=progress_cb,
+            log_callback=log_cb,
+        )
+        progress_bar.empty()
+        log_box.empty()
+
+        st.subheader("Paramètres Heston calibrés")
+        st.dataframe(pd.Series(calib, name="params").to_frame())
+
+        st.subheader("Heatmaps Heston vs Black-Scholes")
+        S_grid, K_grid, call_heston, put_heston = compute_heston_heatmaps(
+            calib,
+            r=rf_rate,
+            q=0.0,
+            S0_ref=S0_ref,
+            span=heatmap_span,
+            points=heatmap_points,
+            maturity=heatmap_maturity,
+        )
+        params_tensor = params_from_calib(calib)
+        with torch.no_grad():
+            atm_call = carr_madan_call_torch(
+                torch.tensor(S0_ref, dtype=torch.float64, device=DEVICE),
+                rf_rate,
+                0.0,
+                torch.tensor(heatmap_maturity, dtype=torch.float64, device=DEVICE),
+                params_tensor,
+                torch.tensor(S0_ref, dtype=torch.float64, device=DEVICE),
             )
-            progress_bar.empty()
-            log_box.empty()
+        vol_bs = implied_vol(float(atm_call.cpu()), S0_ref, S0_ref, heatmap_maturity, rf_rate)
+        call_bs, put_bs = compute_bs_heatmaps(S_grid, K_grid, heatmap_maturity, rf_rate, vol_bs)
 
-            st.subheader("Résumé calibration")
-            st.dataframe(summary)
-            st.subheader("Paramètres Heston calibrés")
-            st.dataframe(pd.Series(calib, name="params").to_frame())
+        summary_heatmap = pd.DataFrame(
+            {
+                "Reference spot": [S0_ref],
+                "Rate": [rf_rate],
+                "Maturity T": [heatmap_maturity],
+                "Strike range": [f"{K_grid[0]:.2f} → {K_grid[-1]:.2f} ({len(K_grid)} pts)"],
+                "Spot range": [f"{S_grid[0]:.2f} → {S_grid[-1]:.2f} ({len(S_grid)} pts)"],
+                "κ": [calib["kappa"]],
+                "θ": [calib["theta"]],
+                "σ": [calib["sigma"]],
+                "ρ": [calib["rho"]],
+                "v₀": [calib["v0"]],
+                "σ_BS_ATM": [vol_bs],
+            }
+        )
+        st.dataframe(summary_heatmap)
 
-            st.subheader("Historique de loss")
-            loss_df = pd.DataFrame({"iteration": range(len(history)), "loss": history})
-            st.line_chart(loss_df.set_index("iteration"))
+        fig_call_heston = plot_heatmap(call_heston, K_grid, S_grid, "Call Price (Heston)")
+        fig_put_heston = plot_heatmap(put_heston, K_grid, S_grid, "Put Price (Heston)")
+        fig_call_bs = plot_heatmap(call_bs, K_grid, S_grid, "Call Price (Black-Scholes)")
+        fig_put_bs = plot_heatmap(put_bs, K_grid, S_grid, "Put Price (Black-Scholes)")
 
-            st.subheader("Heatmaps Heston vs Black-Scholes")
-            S_grid, K_grid, call_heston, put_heston = compute_heston_heatmaps(
-                calib,
-                r=rf_rate,
-                q=0.0,
-                S0_ref=S0_ref,
-                span=heatmap_span,
-                points=heatmap_points,
-                maturity=heatmap_maturity,
-            )
-            params_tensor = params_from_calib(calib)
-            with torch.no_grad():
-                atm_call = carr_madan_call_torch(
-                    torch.tensor(S0_ref, dtype=torch.float64, device=DEVICE),
-                    rf_rate,
-                    0.0,
-                    torch.tensor(heatmap_maturity, dtype=torch.float64, device=DEVICE),
-                    params_tensor,
-                    torch.tensor(S0_ref, dtype=torch.float64, device=DEVICE),
-                )
-            vol_bs = implied_vol(float(atm_call.cpu()), S0_ref, S0_ref, heatmap_maturity, rf_rate)
-            call_bs, put_bs = compute_bs_heatmaps(S_grid, K_grid, heatmap_maturity, rf_rate, vol_bs)
+        col_call_h, col_call_bs = st.columns(2)
+        with col_call_h:
+            st.subheader("Call Heston")
+            st.plotly_chart(fig_call_heston, width="stretch")
+        with col_call_bs:
+            st.subheader("Call Black-Scholes")
+            st.plotly_chart(fig_call_bs, width="stretch")
 
-            summary_heatmap = pd.DataFrame(
-                {
-                    "Reference spot": [S0_ref],
-                    "Rate": [rf_rate],
-                    "Maturity T": [heatmap_maturity],
-                    "Strike range": [f"{K_grid[0]:.2f} → {K_grid[-1]:.2f} ({len(K_grid)} pts)"],
-                    "Spot range": [f"{S_grid[0]:.2f} → {S_grid[-1]:.2f} ({len(S_grid)} pts)"],
-                    "κ": [calib["kappa"]],
-                    "θ": [calib["theta"]],
-                    "σ": [calib["sigma"]],
-                    "ρ": [calib["rho"]],
-                    "v₀": [calib["v0"]],
-                    "σ_BS_ATM": [vol_bs],
-                }
-            )
-            st.dataframe(summary_heatmap)
+        col_put_h, col_put_bs = st.columns(2)
+        with col_put_h:
+            st.subheader("Put Heston")
+            st.plotly_chart(fig_put_heston, width="stretch")
+        with col_put_bs:
+            st.subheader("Put Black-Scholes")
+            st.plotly_chart(fig_put_bs, width="stretch")
 
-            fig_call_heston = plot_heatmap(call_heston, K_grid, S_grid, "Call Price (Heston)")
-            fig_put_heston = plot_heatmap(put_heston, K_grid, S_grid, "Put Price (Heston)")
-            fig_call_bs = plot_heatmap(call_bs, K_grid, S_grid, "Call Price (Black-Scholes)")
-            fig_put_bs = plot_heatmap(put_bs, K_grid, S_grid, "Put Price (Black-Scholes)")
+        st.subheader("Surfaces d'IV (Market vs BS vs Heston)")
 
-            col_call_h, col_call_bs = st.columns(2)
-            with col_call_h:
-                st.subheader("Call Heston")
-                st.plotly_chart(fig_call_heston, use_container_width=True)
-            with col_call_bs:
-                st.subheader("Call Black-Scholes")
-                st.plotly_chart(fig_call_bs, use_container_width=True)
+        def _surface_or_none(df: pd.DataFrame, iv_col: str, label: str) -> pd.DataFrame | None:
+            try:
+                return prepare_iv_surface(df, iv_col, S0_ref, heatmap_span)
+            except ValueError as exc:
+                st.warning(f"{label}: {exc}")
+                return None
 
-            col_put_h, col_put_bs = st.columns(2)
-            with col_put_h:
-                st.subheader("Put Heston")
-                st.plotly_chart(fig_put_heston, use_container_width=True)
-            with col_put_bs:
-                st.subheader("Put Black-Scholes")
-                st.plotly_chart(fig_put_bs, use_container_width=True)
+        calls_with_iv = add_iv_columns(calls_df, "C_mkt", "call", rf_rate, 0.0, params_tensor)
+        puts_with_iv = add_iv_columns(puts_df, "P_mkt", "put", rf_rate, 0.0, params_tensor)
 
-            st.subheader("Surfaces d'IV (Market vs BS vs Heston)")
+        surfaces_calls = [
+            ("Call Market IV", _surface_or_none(calls_with_iv, "iv_market", "Call Market IV")),
+            ("Call BS IV", _surface_or_none(calls_with_iv, "iv_bs", "Call BS IV")),
+            ("Call Heston IV", _surface_or_none(calls_with_iv, "iv_heston", "Call Heston IV")),
+        ]
+        surfaces_puts = [
+            ("Put Market IV", _surface_or_none(puts_with_iv, "iv_market", "Put Market IV")),
+            ("Put BS IV", _surface_or_none(puts_with_iv, "iv_bs", "Put BS IV")),
+            ("Put Heston IV", _surface_or_none(puts_with_iv, "iv_heston", "Put Heston IV")),
+        ]
 
-            def _surface_or_none(df: pd.DataFrame, iv_col: str, label: str) -> pd.DataFrame | None:
-                try:
-                    return prepare_iv_surface(df, iv_col, S0_ref, heatmap_span)
-                except ValueError as exc:
-                    st.warning(f"{label}: {exc}")
-                    return None
+        call_cols = st.columns(3)
+        for col, (title, surface_obj) in zip(call_cols, surfaces_calls):
+            with col:
+                st.caption(title)
+                if surface_obj is not None:
+                    st.plotly_chart(plot_iv_surface(surface_obj, S0_ref, title), width="stretch")
+                else:
+                    st.info("Surface indisponible.")
 
-            calls_with_iv = add_iv_columns(calls_df, "C_mkt", "call", rf_rate, 0.0, params_tensor)
-            puts_with_iv = add_iv_columns(puts_df, "P_mkt", "put", rf_rate, 0.0, params_tensor)
-
-            surfaces_calls = [
-                ("Call Market IV", _surface_or_none(calls_with_iv, "iv_market", "Call Market IV")),
-                ("Call BS IV", _surface_or_none(calls_with_iv, "iv_bs", "Call BS IV")),
-                ("Call Heston IV", _surface_or_none(calls_with_iv, "iv_heston", "Call Heston IV")),
-            ]
-            surfaces_puts = [
-                ("Put Market IV", _surface_or_none(puts_with_iv, "iv_market", "Put Market IV")),
-                ("Put BS IV", _surface_or_none(puts_with_iv, "iv_bs", "Put BS IV")),
-                ("Put Heston IV", _surface_or_none(puts_with_iv, "iv_heston", "Put Heston IV")),
-            ]
-
-            call_cols = st.columns(3)
-            for col, (title, surface_obj) in zip(call_cols, surfaces_calls):
-                with col:
-                    st.caption(title)
-                    if surface_obj is not None:
-                        st.plotly_chart(plot_iv_surface(surface_obj, S0_ref, title), use_container_width=True)
-                    else:
-                        st.info("Surface indisponible.")
-
-            put_cols = st.columns(3)
-            for col, (title, surface_obj) in zip(put_cols, surfaces_puts):
-                with col:
-                    st.caption(title)
-                    if surface_obj is not None:
-                        st.plotly_chart(plot_iv_surface(surface_obj, S0_ref, title), use_container_width=True)
-                    else:
-                        st.info("Surface indisponible.")
-        except Exception as exc:  # noqa: BLE001
-            st.error(f"Échec du téléchargement ou de la calibration: {exc}")
-else:
-    st.info("Configure les paramètres dans la barre latérale puis clique sur **Télécharger, calibrer & comparer**.")
+        put_cols = st.columns(3)
+        for col, (title, surface_obj) in zip(put_cols, surfaces_puts):
+            with col:
+                st.caption(title)
+                if surface_obj is not None:
+                    st.plotly_chart(plot_iv_surface(surface_obj, S0_ref, title), width="stretch")
+                else:
+                    st.info("Surface indisponible.")
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Échec du téléchargement ou de la calibration: {exc}")

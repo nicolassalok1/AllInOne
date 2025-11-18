@@ -17,3 +17,4 @@ A simple Streamlit app template for you to modify!
    ```
    $ streamlit run streamlit_app.py
    ```
+maintenant que j'ai un pricer MC avec les parametres de heston, donnes moi nue heatmap des prix hestons, K va de S0 +/- 10 et S0 pareil.
