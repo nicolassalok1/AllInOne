@@ -173,7 +173,7 @@ def calibrate_heston_nn(
 def heston_monte_carlo(S0: float, r: float, q: float, T: float, params: dict, K_grid: np.ndarray, n_paths: int = 50000) -> Tuple[np.ndarray, np.ndarray]:
     """Simulation Monte Carlo du modèle Heston pour calculer les prix d'options."""
     # Pas de temps basé sur T * 252 (jours de trading)
-    n_steps = max(int(T * 252), 10)  # Au moins 10 pas
+    n_steps = max(int(T ), 10)  # Au moins 10 pas
     dt = T / n_steps
     sqrt_dt = np.sqrt(dt)
     
@@ -278,9 +278,9 @@ col_nn, col_mc, col_grid = st.columns(3)
 
 with col_nn:
     st.subheader("🎯 Calibration NN")
-    max_quotes = st.number_input("Max points calibration", value=1000, min_value=10, step=50, key="max_quotes")
     max_iters = st.number_input("Itérations NN", value=10, min_value=10, max_value=1000, step=10, key="max_iters")
     st.caption("ℹ️ Learning rate fixé à 0.05")
+    st.caption("ℹ️ Max points = 1000")
 
 with col_mc:
     st.subheader("📊 Monte Carlo")
@@ -291,7 +291,7 @@ with col_grid:
     st.subheader("🔢 Grille de calcul")
     span = st.number_input("Span autour de S0 (±)", value=20.0, min_value=5.0, max_value=200.0, step=5.0, key="span")
     step_strike = st.number_input("Step strike", value=1.0, min_value=1.0, max_value=20.0, step=1.0, key="step_strike")
-    n_maturities = st.number_input("Nombre de maturités", value=100, min_value=3, max_value=1000, step=1, key="n_maturities")
+    n_maturities = st.number_input("Nombre de maturités", value=40, min_value=3, max_value=1000, step=1, key="n_maturities")
 
 run_button = st.button("🚀 Lancer l'analyse complète", type="primary", width="stretch")
 
@@ -328,7 +328,7 @@ if run_button:
             calls_df,
             r=rf_rate,
             q=div_yield,
-            max_points=max_quotes,
+            max_points=1000,
             max_iters=max_iters,
             lr=0.05,
             progress_callback=progress_cb,
@@ -348,7 +348,7 @@ if run_button:
         st.info("🎲 Génération des heatmaps de prix par Monte Carlo...")
         
         K_grid = np.arange(S0_ref - span, S0_ref + span + step_strike, step_strike)
-        n_maturities = int(years_ahead * 100)
+        
         T_grid = np.linspace(0.1, years_ahead, n_maturities)
         
         call_prices_mc = np.zeros((len(T_grid), len(K_grid)))
@@ -370,7 +370,6 @@ if run_button:
             st.write(f"**Strikes:** {K_grid[0]:.1f} → {K_grid[-1]:.1f} ({len(K_grid)} points)")
             st.write(f"**Maturités:** {T_grid[0]:.2f} → {T_grid[-1]:.2f} ans ({len(T_grid)} points)")
             st.write(f"**Trajectoires MC:** {n_paths:,}")
-            st.write(f"**Pas de temps:** Adaptatif (T × 252)")
         
         st.subheader("🔥 Heatmaps des prix Monte Carlo Heston")
         
@@ -444,7 +443,7 @@ if run_button:
         fig_iv_call_3d.update_layout(
             title=f"IV Surface Calls (depuis Heston MC) - {ticker}",
             scene=dict(
-                xaxis_title="Strike K",
+                xaxis=dict(title="Strike K", type="linear"),
                 yaxis_title="Maturité T (années)",
                 zaxis=dict(title="Implied Volatility", type="linear")
             ),
@@ -461,7 +460,7 @@ if run_button:
         fig_iv_put_3d.update_layout(
             title=f"IV Surface Puts (depuis Heston MC) - {ticker}",
             scene=dict(
-                xaxis_title="Strike K",
+                xaxis=dict(title="Strike K", type="linear"),
                 yaxis_title="Maturité T (années)",
                 zaxis=dict(title="Implied Volatility", type="linear")
             ),
