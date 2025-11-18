@@ -16,14 +16,14 @@ import yfinance as yf
 from datetime import datetime
 
 st.set_page_config(page_title="🚀 Heston Full Pipeline | Advanced Options Analytics", layout="wide")
-st.title("🚀 Pipeline Heston Complet: Market Data → Heston params NN Calibration → Monte Carlo pricing → IV Surfaces from Carr-Madan")
+st.title("🚀 Pipeline Heston Complet: \nMarket Data → Heston params NN Calibration → Monte Carlo pricing → IV Surfaces from Carr-Madan")
 st.write(
-    "**Analyse complète de volatilité stochastique en une seule interface !** "
-    "\n1️⃣ Téléchargement des données de marché en temps réel depuis yfinance "
-    "\n2️⃣ Calibration automatique des paramètres Heston via réseau de neurones PyTorch "
-    "\n3️⃣ Génération de heatmaps de prix par simulation Monte Carlo "
+    "**Analyse complète de volatilité stochastique en une seule interface !** \n"
+    "\n 1️⃣ Téléchargement des données de marché en temps réel depuis yfinance "
+    "\n 2️⃣ Calibration automatique des paramètres Heston via réseau de neurones PyTorch "
+    "\n  3️⃣ Génération de heatmaps de prix par simulation Monte Carlo "
     "\n4️⃣ Inversion Black-Scholes pour surfaces d'IV 3D interactives "
-    "\n**Comparez prix analytiques vs Monte Carlo et découvrez le smile de volatilité !**"
+    "\n **Comparez prix analytiques vs Monte Carlo et découvrez le smile de volatilité !**"
 )
 
 # Import du module Heston torch
@@ -311,6 +311,7 @@ if run_button:
         progress_bar = st.progress(0)
         status_text = st.empty()
         log_container = st.expander("📜 Logs de calibration", expanded=True)
+        log_placeholder = log_container.empty()
         log_messages = []
         
         def progress_cb(current: int, total: int) -> None:
@@ -319,8 +320,7 @@ if run_button:
         
         def log_cb(msg: str) -> None:
             log_messages.append(msg)
-            with log_container:
-                st.text("\n".join(log_messages[-15:]))  # Affiche les 15 dernières lignes
+            log_placeholder.text("\n".join(log_messages))  # Affiche tous les messages
         
         calib = calibrate_heston_nn(
             calls_df,
