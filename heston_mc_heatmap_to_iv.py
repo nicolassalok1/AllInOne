@@ -60,6 +60,8 @@ def heston_monte_carlo_price(
     n_paths: int = 50000,
     n_steps: int = 100,
     option_type: str = "call",
+    log_steps: bool = False,
+    log_prefix: str | None = None,
 ) -> float:
     """Price option using Monte Carlo simulation with Heston model."""
     dt = T / n_steps
@@ -77,7 +79,7 @@ def heston_monte_carlo_price(
     v = np.ones(n_paths) * v0
     
     # Generate correlated random numbers
-    for _ in range(n_steps):
+    for step in range(1, n_steps + 1):
         Z1 = np.random.standard_normal(n_paths)
         Z2 = rho * Z1 + np.sqrt(1 - rho**2) * np.random.standard_normal(n_paths)
         
@@ -88,6 +90,11 @@ def heston_monte_carlo_price(
         
         # Update stock price (with Euler scheme)
         S = S * np.exp((r - q - 0.5 * v) * dt + v_sqrt * sqrt_dt * Z1)
+
+        if log_steps and (step % max(1, n_steps // 10) == 0 or step == n_steps):
+            pct = 100 * step / n_steps
+            prefix = f"[{log_prefix}] " if log_prefix else ""
+            print(f"{prefix}MC step {step}/{n_steps} ({pct:.0f}%)")
     
     # Compute payoff
     if option_type == "call":
@@ -171,6 +178,7 @@ def compute_heston_heatmap(
     n_paths: int,
     n_steps: int,
     option_type: str = "call",
+    log_inner_mc: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compute heatmap of Heston prices via Monte Carlo."""
     S_min, S_max = S0_ref - span, S0_ref + span
@@ -188,7 +196,9 @@ def compute_heston_heatmap(
     for i, S in enumerate(S_grid):
         for j, K in enumerate(K_grid):
             prices[i, j] = heston_monte_carlo_price(
-                S, K, T, r, q, params, n_paths, n_steps, option_type
+                S, K, T, r, q, params, n_paths, n_steps, option_type,
+                log_steps=log_inner_mc and (i == 0 and j == 0),
+                log_prefix=f"S={S:.2f},K={K:.2f}"
             )
             count += 1
             if count % 50 == 0:
@@ -293,7 +303,7 @@ if __name__ == "__main__":
     print("STEP 1: Computing Heston CALL prices via Monte Carlo")
     print("=" * 80)
     S_grid, K_grid, call_prices = compute_heston_heatmap(
-        S0, calib, r, q, T, span, points, n_paths, n_steps, "call"
+        S0, calib, r, q, T, span, points, n_paths, n_steps, "call", log_inner_mc=True
     )
     
     # Step 2: Compute Heston Put prices via Monte Carlo
@@ -301,7 +311,7 @@ if __name__ == "__main__":
     print("STEP 2: Computing Heston PUT prices via Monte Carlo")
     print("=" * 80)
     S_grid, K_grid, put_prices = compute_heston_heatmap(
-        S0, calib, r, q, T, span, points, n_paths, n_steps, "put"
+        S0, calib, r, q, T, span, points, n_paths, n_steps, "put", log_inner_mc=False
     )
     
     # Step 3: Convert to Implied Volatilities

@@ -85,7 +85,16 @@ def download_options(symbol: str, option_type: str, years_ahead: float = 2.5) ->
                     "iv_market": float(row.get("impliedVolatility", float("nan"))),
                 }
             )
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    try:
+        out_dir = Path("data")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ts = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
+        out_path = out_dir / f"{symbol}_{option_type}_options_{ts}.csv"
+        df.to_csv(out_path, index=False)
+    except Exception:
+        pass
+    return df
 
 
 def prices_from_unconstrained(
