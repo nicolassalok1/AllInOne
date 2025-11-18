@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Streamlit app: compare Heston vs Black-Scholes heatmaps and IV surfaces after calibration."""
+"""Streamlit app: Pipeline complet Market Data → Heston NN Calibration → Monte Carlo → IV Surfaces."""
 
 from __future__ import annotations
 
@@ -13,23 +13,21 @@ import plotly.graph_objects as go
 import streamlit as st
 import torch
 import yfinance as yf
+from datetime import datetime
 
-st.set_page_config(page_title="🎯 Heston vs Black-Scholes | Options Analytics", layout="wide")
-st.title("⚡ Calibration Heston en Temps Réel | Modélisation d'Options Avancée")
+st.set_page_config(page_title="🚀 Heston Full Pipeline | Advanced Options Analytics", layout="wide")
+st.title("🚀 Pipeline Heston Complet: Market Data → NN Calibration → Monte Carlo → IV Surfaces")
 st.write(
-    "**Explorez la volatilité stochastique avec le modèle Heston !** "
-    "\nTéléchargez des données d'options en direct, calibrez automatiquement les paramètres Heston via PyTorch, "
-    "et visualisez instantanément les prix théoriques et surfaces de volatilité implicite. "
-    "\nComparez Heston vs Black-Scholes sur des heatmaps interactives et découvrez le smile de volatilité."
+    "**Analyse complète de volatilité stochastique en une seule interface !** "
+    "\n1️⃣ Téléchargement des données de marché en temps réel depuis yfinance "
+    "\n2️⃣ Calibration automatique des paramètres Heston via réseau de neurones PyTorch "
+    "\n3️⃣ Génération de heatmaps de prix par simulation Monte Carlo "
+    "\n4️⃣ Inversion Black-Scholes pour surfaces d'IV 3D interactives "
+    "\n**Comparez prix analytiques vs Monte Carlo et découvrez le smile de volatilité !**"
 )
 
 # Import du module Heston torch
-import sys
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.append(str(ROOT / "Heston" / "NN"))
-
-from heston_torch import HestonParams, carr_madan_call_torch  # type: ignore  # noqa: E402
+from heston_torch import HestonParams, carr_madan_call_torch, carr_madan_put_torch
 
 torch.set_default_dtype(torch.float64)
 DEVICE = torch.device("cpu")
@@ -37,6 +35,7 @@ MIN_IV_MATURITY = 0.1
 
 
 def fetch_spot(symbol: str) -> float:
+    """Récupère le prix spot actuel."""
     ticker = yf.Ticker(symbol)
     hist = ticker.history(period="1d")
     if hist.empty:
@@ -116,336 +115,212 @@ def loss(
     return 0.5 * (diff**2).mean()
 
 
-def calibrate_heston_from_calls(
-    calls_df: pd.DataFrame,
-    r: float,
-    q: float,
-    max_points: int,
-    max_iters: int,
-    lr: float,
-    progress_callback: Callable[[int, int, float], None] | None = None,
-    log_callback: Callable[[int, float], None] | None = None,
-) -> tuple[dict[str, float], list[float], pd.DataFrame]:
-    df = calls_df[["S0", "K", "T", "C_mkt"]].dropna().copy()
-    n_total = len(df)
-    if n_total > max_points:
-        df = df.sort_values("T")
-        idx = np.linspace(0, n_total - 1, max_points, dtype=int)
-        df = df.iloc[idx]
-    df = df.reset_index(drop=True)
-
-    S0_t = torch.tensor(df["S0"].to_numpy(), dtype=torch.float64, device=DEVICE)
-    K_t = torch.tensor(df["K"].to_numpy(), dtype=torch.float64, device=DEVICE)
-    T_t = torch.tensor(df["T"].to_numpy(), dtype=torch.float64, device=DEVICE)
-    C_mkt_t = torch.tensor(df["C_mkt"].to_numpy(), dtype=torch.float64, device=DEVICE)
-
-    u = torch.tensor([1.0, -3.0, -0.5, -0.5, -3.0], dtype=torch.float64, device=DEVICE, requires_grad=True)
-    optimizer = torch.optim.Adam([u], lr=lr)
-    history: list[float] = []
-
-    for it in range(max_iters):
-        optimizer.zero_grad()
-        L = loss(u, S0_t, K_t, T_t, C_mkt_t, r, q)
-        L.backward()
-        optimizer.step()
-        curr_loss = float(L.detach().cpu())
-        history.append(curr_loss)
-        if progress_callback is not None:
-            progress_callback(it, max_iters, curr_loss)
-        if log_callback is not None:
-            log_callback(it, curr_loss)
-
-    with torch.no_grad():
-        params_fin = HestonParams.from_unconstrained(u[0], u[1], u[2], u[3], u[4])
-    calib = {
-        "kappa": float(params_fin.kappa.cpu()),
-        "theta": float(params_fin.theta.cpu()),
-        "sigma": float(params_fin.sigma.cpu()),
-        "rho": float(params_fin.rho.cpu()),
-        "v0": float(params_fin.v0.cpu()),
-    }
-    summary = pd.DataFrame(
-        {
-            "used_quotes": [len(df)],
-            "total_quotes": [n_total],
-            "loss_final": [history[-1] if history else float("nan")],
-        }
-    )
-    return calib, history, summary
-
-
-def params_from_calib(calib: dict[str, float]) -> HestonParams:
-    return HestonParams(
-        kappa=torch.tensor(calib["kappa"], dtype=torch.float64, device=DEVICE),
-        theta=torch.tensor(calib["theta"], dtype=torch.float64, device=DEVICE),
-        sigma=torch.tensor(calib["sigma"], dtype=torch.float64, device=DEVICE),
-        rho=torch.tensor(calib["rho"], dtype=torch.float64, device=DEVICE),
-        v0=torch.tensor(calib["v0"], dtype=torch.float64, device=DEVICE),
-    )
-
-
-def bs_price(S0: float, K: float, T: float, vol: float, r: float) -> float:
-    if T <= 0.0 or vol <= 0.0 or S0 <= 0.0 or K <= 0.0:
-        return max(0.0, S0 - K * math.exp(-r * T))
-    sqrt_T = math.sqrt(T)
-    v = vol * sqrt_T
-    if S0 <= 0.0 or K <= 0.0:
-        return 0.0
-    d1 = (math.log(S0 / K) + (r + 0.5 * vol * vol) * T) / v
-    d2 = d1 - v
-    nd1 = 0.5 * (1.0 + math.erf(d1 / math.sqrt(2.0)))
-    nd2 = 0.5 * (1.0 + math.erf(d2 / math.sqrt(2.0)))
-    return S0 * nd1 - K * math.exp(-r * T) * nd2
-
-
-def implied_vol(price: float, S0: float, K: float, T: float, r: float, tol: float = 1e-6, max_iter: int = 100) -> float:
-    intrinsic = max(0.0, S0 - K * math.exp(-r * T))
-    if price <= intrinsic + 1e-12:
-        return 0.0
-    low, high = 1e-6, 1.0
-    p_high = bs_price(S0, K, T, high, r)
-    while p_high < price and high < 5.0:
-        high *= 2.0
-        p_high = bs_price(S0, K, T, high, r)
-    if p_high < price:
-        return float("nan")
-    for _ in range(max_iter):
-        mid = 0.5 * (low + high)
-        p_mid = bs_price(S0, K, T, mid, r)
-        if abs(p_mid - price) < tol:
-            return mid
-        if p_mid > price:
-            high = mid
-        else:
-            low = mid
-    return 0.5 * (low + high)
-
-
-def bs_price_option(S0: float, K: float, T: float, vol: float, r: float, option_type: str) -> float:
-    if T <= 0.0 or vol <= 0.0 or S0 <= 0.0 or K <= 0.0:
-        intrinsic_call = max(0.0, S0 - K * math.exp(-r * T))
-        intrinsic_put = max(0.0, K * math.exp(-r * T) - S0)
-        return intrinsic_call if option_type == "call" else intrinsic_put
-    sqrt_T = math.sqrt(T)
-    vol_sqrt_T = vol * sqrt_T
-    d1 = (math.log(S0 / K) + (r + 0.5 * vol * vol) * T) / vol_sqrt_T
-    d2 = d1 - vol_sqrt_T
-    discount = math.exp(-r * T)
-    if option_type == "call":
-        return S0 * 0.5 * (1.0 + math.erf(d1 / math.sqrt(2.0))) - K * discount * 0.5 * (
-            1.0 + math.erf(d2 / math.sqrt(2.0))
-        )
-    return K * discount * 0.5 * (1.0 + math.erf(-d2 / math.sqrt(2.0))) - S0 * 0.5 * (
-        1.0 + math.erf(-d1 / math.sqrt(2.0))
-    )
-
-
-def implied_vol_option(price: float, S0: float, K: float, T: float, r: float, option_type: str) -> float:
-    if T <= 0.0 or price <= 0.0 or S0 <= 0.0 or K <= 0.0:
-        return 0.0
-    intrinsic = bs_price_option(S0, K, T, 0.0, r, option_type)
-    if price <= intrinsic + 1e-8:
-        return 0.0
-    vol_low, vol_high = 1e-6, 1.0
-    price_high = bs_price_option(S0, K, T, vol_high, r, option_type)
-    while price_high < price and vol_high < 5.0:
-        vol_high *= 2.0
-        price_high = bs_price_option(S0, K, T, vol_high, r, option_type)
-    if price_high < price:
-        return float("nan")
-    for _ in range(100):
-        vol_mid = 0.5 * (vol_low + vol_high)
-        price_mid = bs_price_option(S0, K, T, vol_mid, r, option_type)
-        if abs(price_mid - price) < 1e-6:
-            return vol_mid
-        if price_mid > price:
-            vol_high = vol_mid
-        else:
-            vol_low = vol_mid
-    return 0.5 * (vol_low + vol_high)
-
-
-def add_iv_columns(
+def calibrate_heston_nn(
     df: pd.DataFrame,
-    price_col: str,
-    option_type: str,
     r: float,
     q: float,
-    params_tensor: HestonParams,
-) -> pd.DataFrame:
-    df_out = df.dropna(subset=[price_col]).copy()
-    iv_bs_vals: list[float] = []
-    iv_heston_vals: list[float] = []
-    with torch.no_grad():
-        for row in df_out.itertuples(index=False):
-            market_price = float(getattr(row, price_col))
-            iv_bs_vals.append(implied_vol_option(market_price, row.S0, row.K, row.T, r, option_type))
-            S_tensor = torch.tensor(row.S0, dtype=torch.float64, device=DEVICE)
-            K_tensor = torch.tensor(row.K, dtype=torch.float64, device=DEVICE)
-            T_tensor = torch.tensor(row.T, dtype=torch.float64, device=DEVICE)
-            call_price = carr_madan_call_torch(S_tensor, r, q, T_tensor, params_tensor, K_tensor)
-            call_val = float(call_price.cpu())
-            if option_type == "call":
-                price_heston = call_val
-            else:
-                price_heston = call_val - row.S0 + row.K * math.exp(-r * row.T)
-            iv_heston_vals.append(implied_vol_option(price_heston, row.S0, row.K, row.T, r, option_type))
-    df_out["iv_bs"] = iv_bs_vals
-    df_out["iv_heston"] = iv_heston_vals
-    if "iv_market" not in df_out.columns:
-        df_out["iv_market"] = np.nan
-    return df_out
+    max_points: int = 1000,
+    max_iters: int = 200,
+    lr: float = 5e-3,
+    progress_callback: Callable[[int, int], None] | None = None,
+    log_callback: Callable[[str], None] | None = None,
+) -> dict:
+    """Calibration via réseau de neurones PyTorch."""
+    if df.empty:
+        raise ValueError("DataFrame vide.")
+    
+    df_clean = df.dropna(subset=["S0", "K", "T", "C_mkt"])
+    df_clean = df_clean[df_clean["T"] > 0]
+    df_clean = df_clean[df_clean["C_mkt"] > 0]
+    
+    if len(df_clean) == 0:
+        raise ValueError("Aucun point valide après nettoyage.")
+    
+    if len(df_clean) > max_points:
+        df_clean = df_clean.sample(n=max_points, random_state=42)
+    
+    S0_t = torch.tensor(df_clean["S0"].values, dtype=torch.float64, device=DEVICE)
+    K_t = torch.tensor(df_clean["K"].values, dtype=torch.float64, device=DEVICE)
+    T_t = torch.tensor(df_clean["T"].values, dtype=torch.float64, device=DEVICE)
+    C_mkt_t = torch.tensor(df_clean["C_mkt"].values, dtype=torch.float64, device=DEVICE)
+    
+    # Initialisation
+    u = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0], dtype=torch.float64, device=DEVICE, requires_grad=True)
+    optimizer = torch.optim.Adam([u], lr=lr)
+    
+    for iteration in range(max_iters):
+        optimizer.zero_grad()
+        loss_val = loss(u, S0_t, K_t, T_t, C_mkt_t, r, q)
+        loss_val.backward()
+        optimizer.step()
+        
+        if progress_callback:
+            progress_callback(iteration + 1, max_iters)
+        if log_callback and (iteration % 10 == 0 or iteration == max_iters - 1):
+            log_callback(f"Iter {iteration + 1}/{max_iters} | Loss = {loss_val.item():.6f}")
+    
+    params = HestonParams.from_unconstrained(u[0], u[1], u[2], u[3], u[4])
+    
+    return {
+        "kappa": float(params.kappa.cpu().detach()),
+        "theta": float(params.theta.cpu().detach()),
+        "sigma": float(params.sigma.cpu().detach()),
+        "rho": float(params.rho.cpu().detach()),
+        "v0": float(params.v0.cpu().detach()),
+    }
 
 
-def prepare_iv_surface(
-    df: pd.DataFrame, iv_column: str, spot: float, strike_span: float, min_maturity: float = MIN_IV_MATURITY
-) -> pd.DataFrame:
-    lower = spot - strike_span
-    upper = spot + strike_span
-    df_sel = df[(df["K"] >= lower) & (df["K"] <= upper) & (df["T"] >= min_maturity)].copy()
-    df_sel = df_sel.dropna(subset=[iv_column])
-    if df_sel.empty:
-        raise ValueError(f"Aucune donnée pour construire la surface {iv_column}.")
-    df_sel = df_sel.sort_values(["T", "K"])
-    surface = df_sel.pivot_table(index="T", columns="K", values=iv_column, aggfunc="mean")
-    surface = surface.sort_index().sort_index(axis=1)
-    surface = surface.interpolate(axis=1, limit_direction="both").interpolate(axis=1, limit_direction="both")
-    if surface.empty:
-        raise ValueError(f"Surface vide pour {iv_column}.")
-    return surface
+def heston_monte_carlo(S0: float, r: float, q: float, T: float, params: dict, K_grid: np.ndarray, n_paths: int = 50000, n_steps: int = 100) -> Tuple[np.ndarray, np.ndarray]:
+    """Simulation Monte Carlo du modèle Heston pour calculer les prix d'options."""
+    dt = T / n_steps
+    sqrt_dt = np.sqrt(dt)
+    
+    kappa = params['kappa']
+    theta = params['theta']
+    sigma = params['sigma']
+    rho = params['rho']
+    v0 = params['v0']
+    
+    # Initialisation
+    S = np.full(n_paths, S0)
+    v = np.full(n_paths, v0)
+    
+    # Simulation
+    for _ in range(n_steps):
+        z1 = np.random.standard_normal(n_paths)
+        z2 = rho * z1 + np.sqrt(1 - rho**2) * np.random.standard_normal(n_paths)
+        
+        v_pos = np.maximum(v, 0)
+        S = S * np.exp((r - q - 0.5 * v_pos) * dt + np.sqrt(v_pos) * sqrt_dt * z1)
+        v = v + kappa * (theta - v_pos) * dt + sigma * np.sqrt(v_pos) * sqrt_dt * z2
+        v = np.maximum(v, 0)
+    
+    # Payoffs
+    discount = np.exp(-r * T)
+    call_prices = np.array([discount * np.maximum(S - K, 0).mean() for K in K_grid])
+    put_prices = np.array([discount * np.maximum(K - S, 0).mean() for K in K_grid])
+    
+    return call_prices, put_prices
 
 
-def plot_iv_surface(surface: pd.DataFrame, spot: float, title_suffix: str) -> go.Figure:
-    k_vals = surface.columns.to_numpy(dtype=float)
-    t_vals = surface.index.to_numpy(dtype=float)
-    KK, TT = np.meshgrid(k_vals, t_vals)
-    data = surface.to_numpy(dtype=float)
-    if np.isnan(data).any():
-        mean_val = np.nanmean(data)
-        if np.isnan(mean_val):
-            mean_val = 0.0
-        data = np.nan_to_num(data, nan=mean_val)
-    fig = go.Figure(
-        data=[
-            go.Surface(
-                x=KK,
-                y=TT,
-                z=data,
-                colorscale="Viridis",
-                colorbar=dict(title="IV"),
-                showscale=True,
-            )
-        ]
-    )
-    fig.update_layout(
-        title=title_suffix,
-        scene=dict(
-            xaxis=dict(title=f"Strike K (spot ≈ {spot:.2f})"),
-            yaxis=dict(title="Maturité T (années)"),
-            zaxis=dict(title="Implied Volatility"),
-        ),
-        height=550,
-    )
-    return fig
+def bs_call(S: float, K: float, T: float, r: float, sigma: float) -> float:
+    """Prix d'un call Black-Scholes."""
+    if T <= 0 or sigma <= 0:
+        return max(S - K, 0)
+    d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
+    d2 = d1 - sigma * math.sqrt(T)
+    from scipy.stats import norm
+    return S * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
 
 
-def compute_heston_heatmaps(
-    calib: dict[str, float], r: float, q: float, S0_ref: float, span: float, points: int, maturity: float
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    S_grid = np.linspace(S0_ref - span, S0_ref + span, points)
-    S0_rounded = math.ceil(S0_ref / 10) * 10
-    K_grid = np.arange(S0_rounded - 20, S0_rounded + 21, 5)
-    call_map = np.zeros((len(S_grid), len(K_grid)))
-    put_map = np.zeros_like(call_map)
-    params_tensor = params_from_calib(calib)
-
-    with torch.no_grad():
-        T_tensor = torch.tensor(maturity, dtype=torch.float64, device=DEVICE)
-        for i, S_val in enumerate(S_grid):
-            S_tensor = torch.tensor(S_val, dtype=torch.float64, device=DEVICE)
-            for j, K_val in enumerate(K_grid):
-                K_tensor = torch.tensor(K_val, dtype=torch.float64, device=DEVICE)
-                call_p = carr_madan_call_torch(S_tensor, r, q, T_tensor, params_tensor, K_tensor)
-                call_val = float(call_p.cpu())
-                call_map[i, j] = call_val
-                put_map[i, j] = call_val - S_val + K_val * math.exp(-r * maturity)
-    return S_grid, K_grid, call_map, put_map
+def bs_put(S: float, K: float, T: float, r: float, sigma: float) -> float:
+    """Prix d'un put Black-Scholes."""
+    if T <= 0 or sigma <= 0:
+        return max(K - S, 0)
+    d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
+    d2 = d1 - sigma * math.sqrt(T)
+    from scipy.stats import norm
+    return K * math.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
 
 
-def compute_bs_heatmaps(
-    S_grid: np.ndarray, K_grid: np.ndarray, maturity: float, r: float, vol: float
-) -> tuple[np.ndarray, np.ndarray]:
-    call_map = np.zeros((len(S_grid), len(K_grid)))
-    put_map = np.zeros_like(call_map)
-    for i, S_val in enumerate(S_grid):
-        for j, K_val in enumerate(K_grid):
-            call_val = bs_price(S_val, K_val, maturity, vol, r)
-            call_map[i, j] = call_val
-            put_map[i, j] = call_val - S_val + K_val * math.exp(-r * maturity)
-    return call_map, put_map
+def implied_vol_option(price: float, S: float, K: float, T: float, r: float, option_type: str = 'call', tol: float = 1e-6, max_iter: int = 100) -> float:
+    """Calcul de la volatilité implicite par Newton-Raphson."""
+    if T < MIN_IV_MATURITY:
+        return np.nan
+    
+    intrinsic = max(S - K, 0) if option_type == 'call' else max(K - S, 0)
+    if price <= intrinsic:
+        return np.nan
+    
+    sigma = 0.3  # Initial guess
+    
+    for _ in range(max_iter):
+        if option_type == 'call':
+            price_est = bs_call(S, K, T, r, sigma)
+        else:
+            price_est = bs_put(S, K, T, r, sigma)
+        
+        diff = price_est - price
+        
+        if abs(diff) < tol:
+            return sigma
+        
+        # Vega
+        d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
+        from scipy.stats import norm
+        vega = S * norm.pdf(d1) * math.sqrt(T)
+        
+        if vega < 1e-10:
+            return np.nan
+        
+        sigma = sigma - diff / vega
+        
+        if sigma <= 0:
+            return np.nan
+    
+    return np.nan
 
 
-def plot_price_surface(matrix: np.ndarray, x_grid: np.ndarray, y_grid: np.ndarray, title: str) -> go.Figure:
-    """Create 3D surface plot: X=Strike K, Y=Spot S, Z=Price"""
-    X, Y = np.meshgrid(x_grid, y_grid)
-    fig = go.Figure(
-        data=go.Surface(
-            x=X,
-            y=Y,
-            z=matrix,
-            colorscale="Viridis",
-            colorbar=dict(title="Prix"),
-        )
-    )
-    fig.update_layout(
-        title=title,
-        scene=dict(
-            xaxis=dict(title="Strike K"),
-            yaxis=dict(title="Spot S₀"),
-            zaxis=dict(title="Prix"),
-        ),
-        height=600,
-    )
-    return fig
+# Sidebar configuration
+st.sidebar.header("⚙️ Configuration de base")
 
+ticker = st.sidebar.text_input("Ticker", value="SPY")
+rf_rate = st.sidebar.number_input("Taux sans risque (r)", value=0.02, step=0.01, format="%.3f")
+div_yield = st.sidebar.number_input("Dividende (q)", value=0.00, step=0.01, format="%.3f")
+years_ahead = st.sidebar.number_input("Horizon (années)", value=2.5, min_value=0.1, max_value=5.0, step=0.1)
 
-with st.sidebar:
-    st.header("Paramètres")
-    ticker = st.text_input("Ticker", value="SPY").strip().upper()
-    rf_rate = st.slider("Taux sans risque r", min_value=-0.01, max_value=0.10, value=0.02, step=0.005)
-    years_ahead = 2.5
-    max_quotes = 300
-    max_iters = 80
-    lr = 5e-3
-    heatmap_span = st.number_input("Écart autour de S₀ (±)", min_value=10.0, max_value=200.0, value=10.0, step=5.0)
-    heatmap_points = st.slider("Points par axe", min_value=5, max_value=31, value=21, step=2)
-    heatmap_maturity = st.number_input("Maturité heatmap (années)", min_value=0.1, max_value=5.0, value=1.0, step=0.1)
-    run_button = st.button("Télécharger & calibrer")
+# Paramètres principaux sur l'écran
+st.header("⚙️ Paramètres de modélisation")
 
+col_nn, col_mc, col_grid = st.columns(3)
 
-if run_button and ticker:
+with col_nn:
+    st.subheader("🎯 Calibration NN")
+    max_quotes = st.number_input("Max points calibration", value=1000, min_value=10, step=50, key="max_quotes")
+    max_iters = st.number_input("Itérations NN", value=100, min_value=10, max_value=1000, step=10, key="max_iters")
+    lr = st.number_input("Learning rate", value=0.005, min_value=0.0001, max_value=0.1, step=0.001, format="%.4f", key="lr")
+
+with col_mc:
+    st.subheader("📊 Monte Carlo")
+    n_paths = st.number_input("Nombre de trajectoires", value=50000, min_value=1000, max_value=200000, step=1000, key="n_paths")
+    n_steps = st.number_input("Pas de temps", value=100, min_value=10, max_value=500, step=10, key="n_steps")
+
+with col_grid:
+    st.subheader("🔢 Grille de calcul")
+    span = st.number_input("Span autour de S0 (±)", value=50.0, min_value=5.0, max_value=200.0, step=5.0, key="span")
+    step_strike = st.number_input("Step strike", value=5.0, min_value=1.0, max_value=20.0, step=1.0, key="step_strike")
+    n_maturities = st.number_input("Nombre de maturités", value=10, min_value=3, max_value=20, step=1, key="n_maturities")
+
+run_button = st.button("🚀 Lancer l'analyse complète", type="primary", use_container_width=True)
+
+st.divider()
+
+if run_button:
     try:
-        calls_df = download_options(ticker, "call", years_ahead=years_ahead)
-        puts_df = download_options(ticker, "put", years_ahead=years_ahead)
-        st.write(f"{len(calls_df)} calls et {len(puts_df)} puts téléchargés pour {ticker}.")
-        S0_ref = float(calls_df["S0"].median())
-
-        progress_bar = st.progress(0.0, text="Calibration Heston...")
+        st.info(f"📡 Téléchargement des données pour {ticker}...")
+        
+        # Étape 1: Téléchargement des données
+        calls_df = download_options(ticker, "call", years_ahead)
+        puts_df = download_options(ticker, "put", years_ahead)
+        S0_ref = fetch_spot(ticker)
+        
+        st.success(f"✓ {len(calls_df)} calls et {len(puts_df)} puts téléchargés | S0 = {S0_ref:.2f}")
+        
+        # Étape 2: Calibration Heston NN
+        st.info("🧠 Calibration des paramètres Heston via réseau de neurones...")
+        progress_bar = st.progress(0)
         log_box = st.empty()
-        log_messages: list[str] = []
-
-        def progress_cb(iter_idx: int, total: int, loss_val: float) -> None:
-            fraction = (iter_idx + 1) / total
-            progress_bar.progress(fraction, text=f"Calibration... loss={loss_val:.3e}")
-
-        def log_cb(iter_idx: int, loss_val: float) -> None:
-            log_messages.append(f"Iter {iter_idx:03d} | loss = {loss_val:.6e}")
-            log_box.text("\n".join(log_messages[-10:]))
-
-        calib, history, summary = calibrate_heston_from_calls(
+        
+        def progress_cb(current: int, total: int) -> None:
+            progress_bar.progress(current / total)
+        
+        def log_cb(msg: str) -> None:
+            log_box.text(msg)
+        
+        calib = calibrate_heston_nn(
             calls_df,
             r=rf_rate,
-            q=0.0,
+            q=div_yield,
             max_points=max_quotes,
             max_iters=max_iters,
             lr=lr,
@@ -454,110 +329,210 @@ if run_button and ticker:
         )
         progress_bar.empty()
         log_box.empty()
-
-        st.subheader("Paramètres Heston calibrés")
-        st.dataframe(pd.Series(calib, name="params").to_frame())
-
-        st.subheader("Surfaces de Prix Heston vs Black-Scholes")
-        S_grid, K_grid, call_heston, put_heston = compute_heston_heatmaps(
-            calib,
-            r=rf_rate,
-            q=0.0,
-            S0_ref=S0_ref,
-            span=heatmap_span,
-            points=heatmap_points,
-            maturity=heatmap_maturity,
+        
+        st.success("✓ Calibration terminée!")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("📊 Paramètres Heston calibrés")
+            st.dataframe(pd.Series(calib, name="Valeur").to_frame())
+        
+        # Étape 3: Monte Carlo Heston - Grilles de prix
+        st.info("🎲 Génération des heatmaps de prix par Monte Carlo...")
+        
+        K_grid = np.arange(S0_ref - span, S0_ref + span + step_strike, step_strike)
+        T_grid = np.linspace(0.1, 2.0, n_maturities)
+        
+        call_prices_mc = np.zeros((len(T_grid), len(K_grid)))
+        put_prices_mc = np.zeros((len(T_grid), len(K_grid)))
+        
+        mc_progress = st.progress(0)
+        for i, T_val in enumerate(T_grid):
+            call_vec, put_vec = heston_monte_carlo(S0_ref, rf_rate, div_yield, T_val, calib, K_grid, n_paths, n_steps)
+            call_prices_mc[i, :] = call_vec
+            put_prices_mc[i, :] = put_vec
+            mc_progress.progress((i + 1) / len(T_grid))
+        mc_progress.empty()
+        
+        st.success("✓ Heatmaps Monte Carlo générées!")
+        
+        # Affichage des heatmaps
+        with col2:
+            st.subheader("📈 Grille de calcul")
+            st.write(f"**Strikes:** {K_grid[0]:.1f} → {K_grid[-1]:.1f} ({len(K_grid)} points)")
+            st.write(f"**Maturités:** {T_grid[0]:.2f} → {T_grid[-1]:.2f} ans ({len(T_grid)} points)")
+            st.write(f"**Trajectoires MC:** {n_paths:,}")
+            st.write(f"**Pas de temps:** {n_steps}")
+        
+        st.subheader("🔥 Heatmaps des prix Monte Carlo Heston")
+        
+        fig_call_mc = go.Figure(data=[go.Heatmap(
+            x=K_grid,
+            y=T_grid,
+            z=call_prices_mc,
+            colorscale='Viridis',
+            colorbar=dict(title="Prix")
+        )])
+        fig_call_mc.update_layout(
+            title=f"Call Prices (Heston Monte Carlo) - {ticker}",
+            xaxis_title="Strike K",
+            yaxis_title="Maturité T (années)",
+            height=500
         )
-        params_tensor = params_from_calib(calib)
-        with torch.no_grad():
-            atm_call = carr_madan_call_torch(
-                torch.tensor(S0_ref, dtype=torch.float64, device=DEVICE),
-                rf_rate,
-                0.0,
-                torch.tensor(heatmap_maturity, dtype=torch.float64, device=DEVICE),
-                params_tensor,
-                torch.tensor(S0_ref, dtype=torch.float64, device=DEVICE),
-            )
-        vol_bs = implied_vol(float(atm_call.cpu()), S0_ref, S0_ref, heatmap_maturity, rf_rate)
-        call_bs, put_bs = compute_bs_heatmaps(S_grid, K_grid, heatmap_maturity, rf_rate, vol_bs)
-
-        summary_heatmap = pd.DataFrame(
-            {
-                "Reference spot": [S0_ref],
-                "Rate": [rf_rate],
-                "Maturity T": [heatmap_maturity],
-                "Strike range": [f"{K_grid[0]:.2f} → {K_grid[-1]:.2f} ({len(K_grid)} pts)"],
-                "Spot range": [f"{S_grid[0]:.2f} → {S_grid[-1]:.2f} ({len(S_grid)} pts)"],
-                "κ": [calib["kappa"]],
-                "θ": [calib["theta"]],
-                "σ": [calib["sigma"]],
-                "ρ": [calib["rho"]],
-                "v₀": [calib["v0"]],
-                "σ_BS_ATM": [vol_bs],
-            }
+        
+        fig_put_mc = go.Figure(data=[go.Heatmap(
+            x=K_grid,
+            y=T_grid,
+            z=put_prices_mc,
+            colorscale='Viridis',
+            colorbar=dict(title="Prix")
+        )])
+        fig_put_mc.update_layout(
+            title=f"Put Prices (Heston Monte Carlo) - {ticker}",
+            xaxis_title="Strike K",
+            yaxis_title="Maturité T (années)",
+            height=500
         )
-        st.dataframe(summary_heatmap)
-
-        fig_call_heston = plot_price_surface(call_heston, K_grid, S_grid, "Call Price (Heston)")
-        fig_put_heston = plot_price_surface(put_heston, K_grid, S_grid, "Put Price (Heston)")
-        fig_call_bs = plot_price_surface(call_bs, K_grid, S_grid, "Call Price (Black-Scholes)")
-        fig_put_bs = plot_price_surface(put_bs, K_grid, S_grid, "Put Price (Black-Scholes)")
-
-        col_call_h, col_call_bs = st.columns(2)
-        with col_call_h:
-            st.subheader("Call Heston")
-            st.plotly_chart(fig_call_heston, width="stretch")
-        with col_call_bs:
-            st.subheader("Call Black-Scholes")
-            st.plotly_chart(fig_call_bs, width="stretch")
-
-        col_put_h, col_put_bs = st.columns(2)
-        with col_put_h:
-            st.subheader("Put Heston")
-            st.plotly_chart(fig_put_heston, width="stretch")
-        with col_put_bs:
-            st.subheader("Put Black-Scholes")
-            st.plotly_chart(fig_put_bs, width="stretch")
-
-        st.subheader("Surfaces d'IV (Market vs BS vs Heston)")
-
-        def _surface_or_none(df: pd.DataFrame, iv_col: str, label: str) -> pd.DataFrame | None:
-            try:
-                return prepare_iv_surface(df, iv_col, S0_ref, heatmap_span)
-            except ValueError as exc:
-                st.warning(f"{label}: {exc}")
-                return None
-
-        calls_with_iv = add_iv_columns(calls_df, "C_mkt", "call", rf_rate, 0.0, params_tensor)
-        puts_with_iv = add_iv_columns(puts_df, "P_mkt", "put", rf_rate, 0.0, params_tensor)
-
-        surfaces_calls = [
-            ("Call Market IV", _surface_or_none(calls_with_iv, "iv_market", "Call Market IV")),
-            ("Call BS IV", _surface_or_none(calls_with_iv, "iv_bs", "Call BS IV")),
-            ("Call Heston IV", _surface_or_none(calls_with_iv, "iv_heston", "Call Heston IV")),
-        ]
-        surfaces_puts = [
-            ("Put Market IV", _surface_or_none(puts_with_iv, "iv_market", "Put Market IV")),
-            ("Put BS IV", _surface_or_none(puts_with_iv, "iv_bs", "Put BS IV")),
-            ("Put Heston IV", _surface_or_none(puts_with_iv, "iv_heston", "Put Heston IV")),
-        ]
-
-        call_cols = st.columns(3)
-        for col, (title, surface_obj) in zip(call_cols, surfaces_calls):
-            with col:
-                st.caption(title)
-                if surface_obj is not None:
-                    st.plotly_chart(plot_iv_surface(surface_obj, S0_ref, title), width="stretch")
-                else:
-                    st.info("Surface indisponible.")
-
-        put_cols = st.columns(3)
-        for col, (title, surface_obj) in zip(put_cols, surfaces_puts):
-            with col:
-                st.caption(title)
-                if surface_obj is not None:
-                    st.plotly_chart(plot_iv_surface(surface_obj, S0_ref, title), width="stretch")
-                else:
-                    st.info("Surface indisponible.")
-    except Exception as exc:  # noqa: BLE001
-        st.error(f"Échec du téléchargement ou de la calibration: {exc}")
+        
+        col_mc1, col_mc2 = st.columns(2)
+        with col_mc1:
+            st.plotly_chart(fig_call_mc, use_container_width=True)
+        with col_mc2:
+            st.plotly_chart(fig_put_mc, use_container_width=True)
+        
+        # Étape 4: Inversion BS pour IV surfaces
+        st.info("🔄 Inversion Black-Scholes pour surfaces d'IV...")
+        
+        iv_calls_mc = np.zeros_like(call_prices_mc)
+        iv_puts_mc = np.zeros_like(put_prices_mc)
+        
+        iv_progress = st.progress(0)
+        total_calcs = len(T_grid) * len(K_grid)
+        calc_count = 0
+        
+        for i, T_val in enumerate(T_grid):
+            for j, K_val in enumerate(K_grid):
+                iv_calls_mc[i, j] = implied_vol_option(call_prices_mc[i, j], S0_ref, K_val, T_val, rf_rate, 'call')
+                iv_puts_mc[i, j] = implied_vol_option(put_prices_mc[i, j], S0_ref, K_val, T_val, rf_rate, 'put')
+                calc_count += 2
+                if calc_count % 20 == 0:
+                    iv_progress.progress(calc_count / (2 * total_calcs))
+        iv_progress.empty()
+        
+        st.success("✓ Surfaces d'IV calculées!")
+        
+        # Surfaces 3D
+        st.subheader("🌊 Surfaces de Volatilité Implicite 3D")
+        
+        KK, TT = np.meshgrid(K_grid, T_grid)
+        
+        fig_iv_call_3d = go.Figure(data=[go.Surface(
+            x=KK,
+            y=TT,
+            z=iv_calls_mc,
+            colorscale='Viridis',
+            colorbar=dict(title="IV")
+        )])
+        fig_iv_call_3d.update_layout(
+            title=f"IV Surface Calls (depuis Heston MC) - {ticker}",
+            scene=dict(
+                xaxis_title="Strike K",
+                yaxis_title="Maturité T (années)",
+                zaxis_title="Implied Volatility"
+            ),
+            height=600
+        )
+        
+        fig_iv_put_3d = go.Figure(data=[go.Surface(
+            x=KK,
+            y=TT,
+            z=iv_puts_mc,
+            colorscale='Viridis',
+            colorbar=dict(title="IV")
+        )])
+        fig_iv_put_3d.update_layout(
+            title=f"IV Surface Puts (depuis Heston MC) - {ticker}",
+            scene=dict(
+                xaxis_title="Strike K",
+                yaxis_title="Maturité T (années)",
+                zaxis_title="Implied Volatility"
+            ),
+            height=600
+        )
+        
+        col_iv1, col_iv2 = st.columns(2)
+        with col_iv1:
+            st.plotly_chart(fig_iv_call_3d, use_container_width=True)
+        with col_iv2:
+            st.plotly_chart(fig_iv_put_3d, use_container_width=True)
+        
+        # Comparaison avec analytique Carr-Madan
+        st.subheader("🔬 Comparaison: Monte Carlo vs Carr-Madan Analytique")
+        
+        params_cm = HestonParams(
+            kappa=torch.tensor(calib['kappa'], dtype=torch.float64),
+            theta=torch.tensor(calib['theta'], dtype=torch.float64),
+            sigma=torch.tensor(calib['sigma'], dtype=torch.float64),
+            rho=torch.tensor(calib['rho'], dtype=torch.float64),
+            v0=torch.tensor(calib['v0'], dtype=torch.float64),
+        )
+        
+        # Choisir une maturité pour comparer
+        T_compare = T_grid[len(T_grid)//2]
+        idx_T = len(T_grid)//2
+        
+        Ks_t = torch.tensor(K_grid, dtype=torch.float64)
+        call_anal = carr_madan_call_torch(S0_ref, rf_rate, div_yield, float(T_compare), params_cm, Ks_t)
+        put_anal = carr_madan_put_torch(S0_ref, rf_rate, div_yield, float(T_compare), params_cm, Ks_t)
+        
+        call_anal_np = call_anal.detach().cpu().numpy()
+        put_anal_np = put_anal.detach().cpu().numpy()
+        
+        # Graphiques de comparaison
+        fig_compare = go.Figure()
+        fig_compare.add_trace(go.Scatter(x=K_grid, y=call_prices_mc[idx_T, :], mode='lines+markers', name='MC Call', line=dict(color='blue')))
+        fig_compare.add_trace(go.Scatter(x=K_grid, y=call_anal_np, mode='lines', name='Carr-Madan Call', line=dict(color='red', dash='dash')))
+        fig_compare.add_trace(go.Scatter(x=K_grid, y=put_prices_mc[idx_T, :], mode='lines+markers', name='MC Put', line=dict(color='green')))
+        fig_compare.add_trace(go.Scatter(x=K_grid, y=put_anal_np, mode='lines', name='Carr-Madan Put', line=dict(color='orange', dash='dash')))
+        fig_compare.update_layout(
+            title=f"Comparaison MC vs Analytique (T={T_compare:.2f} ans)",
+            xaxis_title="Strike K",
+            yaxis_title="Prix",
+            height=500,
+            showlegend=True
+        )
+        st.plotly_chart(fig_compare, use_container_width=True)
+        
+        # Export des résultats
+        st.subheader("💾 Export des résultats")
+        results = []
+        for i, T_val in enumerate(T_grid):
+            for j, K_val in enumerate(K_grid):
+                results.append({
+                    'K': K_val,
+                    'T': T_val,
+                    'call_price_mc': call_prices_mc[i, j],
+                    'put_price_mc': put_prices_mc[i, j],
+                    'call_iv': iv_calls_mc[i, j],
+                    'put_iv': iv_puts_mc[i, j],
+                })
+        
+        df_results = pd.DataFrame(results)
+        
+        try:
+            out_dir = Path("data")
+            out_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            out_path = out_dir / f"heston_analysis_{ticker}_{ts}.csv"
+            df_results.to_csv(out_path, index=False)
+            st.success(f"✓ Résultats exportés: {out_path}")
+        except Exception as e:
+            st.warning(f"⚠ Erreur export CSV: {e}")
+        
+        st.balloons()
+        st.success("🎉 Analyse complète terminée avec succès!")
+        
+    except Exception as exc:
+        st.error(f"❌ Erreur lors de l'analyse: {exc}")
+        import traceback
+        st.code(traceback.format_exc())
