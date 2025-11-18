@@ -207,12 +207,12 @@ def carr_madan_put_torch(
     k = -b + lambda_ * j
 
     i = torch.complex(torch.tensor(0.0, dtype=_REAL_DTYPE), torch.tensor(1.0, dtype=_REAL_DTYPE))
-    # Pour puts, on utilise u + i * alpha au lieu de u - i * (alpha + 1)
-    u_complex = u + i * alpha_t
+    # Pour puts, on utilise u - i * alpha (Carr-Madan 1999)
+    u_complex = u - i * alpha_t
     phi = heston_cf(u_complex, T_t, S0_t, r_t, q_t, params)
 
     numerator = torch.exp(-r_t * T_t) * phi
-    denominator = (alpha_t ** 2 + alpha_t - u ** 2) - i * u * (2.0 * alpha_t + 1.0)
+    denominator = (alpha_t ** 2 + alpha_t - u ** 2) + i * u * (2.0 * alpha_t + 1.0)
     # Dénominateur régularisé pour éviter les fréquences où la formule diverge.
     psi = numerator / (denominator + torch.tensor(1e-12, dtype=_COMPLEX_DTYPE))
 
