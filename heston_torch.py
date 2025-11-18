@@ -174,3 +174,57 @@ def carr_madan_call_torch(
     if original_shape == ():
         return prices.squeeze()
     return prices.reshape(original_shape)
+
+
+def carr_madan_put_torch(
+    S0,
+    r,
+    q,
+    T,
+    params: HestonParams,
+    K,
+    alpha: float = 1.5,
+    Nfft: int = 2 ** 12,
+    eta: float = 0.25,
+) -> torch.Tensor:
+    """Carr-Madan FFT-based Heston put price computation with interpolation over strikes."""
+    # Tous les scalaires sont aplanis pour vectoriser la FFT dans torch.
+    S0_t = _as_real(S0)
+    r_t = _as_real(r)
+    q_t = _as_real(q)
+    T_t = _as_real(T)
+    alpha_t = _as_real(alpha)
+    eta_t = _as_real(eta)
+    N = int(Nfft)
+
+    K_input = _as_real(K)
+    original_shape = K_input.shape if K_input.shape != torch.Size([]) else ()
+    K_tensor = K_input.reshape(-1)
+    j = torch.arange(N, dtype=_REAL_DTYPE)
+    u = j * eta_t
+    lambda_ = 2.0 * torch.pi / (N * eta_t)
+    b = lambda_ * N / 2.0
+    k = -b + lambda_ * j
+
+    i = torch.complex(torch.tensor(0.0, dtype=_REAL_DTYPE), torch.tensor(1.0, dtype=_REAL_DTYPE))
+    # Pour puts, on utilise u + i * alpha au lieu de u - i * (alpha + 1)
+    u_complex = u + i * alpha_t
+    phi = heston_cf(u_complex, T_t, S0_t, r_t, q_t, params)
+
+    numerator = torch.exp(-r_t * T_t) * phi
+    denominator = (alpha_t ** 2 + alpha_t - u ** 2) - i * u * (2.0 * alpha_t + 1.0)
+    # Dénominateur régularisé pour éviter les fréquences où la formule diverge.
+    psi = numerator / (denominator + torch.tensor(1e-12, dtype=_COMPLEX_DTYPE))
+
+    weights = _simpson_weights(N, dtype=_REAL_DTYPE)
+    exp_term = torch.exp(i * b * u)
+    fft_input = psi * exp_term * weights * eta_t
+    fft_vals = torch.fft.fft(fft_input)
+    # On retire l'exponentielle de damping pour retrouver le prix du put brut.
+    puts = torch.exp(-alpha_t * k) / torch.pi * fft_vals.real
+
+    K_grid = torch.exp(k)
+    prices = _linear_interpolate(K_grid, puts, K_tensor)
+    if original_shape == ():
+        return prices.squeeze()
+    return prices.reshape(original_shape)
