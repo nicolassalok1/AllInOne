@@ -182,9 +182,9 @@ def compute_heston_heatmap(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compute heatmap of Heston prices via Monte Carlo."""
     S_min, S_max = S0_ref - span, S0_ref + span
-    K_min, K_max = S0_ref - span, S0_ref + span
     S_grid = np.linspace(S_min, S_max, points)
-    K_grid = np.linspace(K_min, K_max, points)
+    S0_rounded = math.ceil(S0_ref / 10) * 10
+    K_grid = np.arange(S0_rounded - 20, S0_rounded + 21, 5)
     
     params = params_from_calib(calib)
     prices = np.zeros((len(S_grid), len(K_grid)))

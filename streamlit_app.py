@@ -353,7 +353,8 @@ def compute_heston_heatmaps(
     calib: dict[str, float], r: float, q: float, S0_ref: float, span: float, points: int, maturity: float
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     S_grid = np.linspace(S0_ref - span, S0_ref + span, points)
-    K_grid = np.linspace(S0_ref - span, S0_ref + span, points)
+    S0_rounded = math.ceil(S0_ref / 10) * 10
+    K_grid = np.arange(S0_rounded - 20, S0_rounded + 21, 5)
     call_map = np.zeros((len(S_grid), len(K_grid)))
     put_map = np.zeros_like(call_map)
     params_tensor = params_from_calib(calib)
@@ -384,17 +385,27 @@ def compute_bs_heatmaps(
     return call_map, put_map
 
 
-def plot_heatmap(matrix: np.ndarray, x_grid: np.ndarray, y_grid: np.ndarray, title: str) -> go.Figure:
+def plot_price_surface(matrix: np.ndarray, x_grid: np.ndarray, y_grid: np.ndarray, title: str) -> go.Figure:
+    """Create 3D surface plot: X=Strike K, Y=Spot S, Z=Price"""
+    X, Y = np.meshgrid(x_grid, y_grid)
     fig = go.Figure(
-        data=go.Heatmap(
+        data=go.Surface(
+            x=X,
+            y=Y,
             z=matrix,
-            x=np.round(x_grid, 2),
-            y=np.round(y_grid, 2),
             colorscale="Viridis",
-            colorbar=dict(title=title),
+            colorbar=dict(title="Prix"),
         )
     )
-    fig.update_layout(xaxis_title="Strike K", yaxis_title="Spot S₀", yaxis_autorange="reversed", title=title)
+    fig.update_layout(
+        title=title,
+        scene=dict(
+            xaxis=dict(title="Strike K"),
+            yaxis=dict(title="Spot S₀"),
+            zaxis=dict(title="Prix"),
+        ),
+        height=600,
+    )
     return fig
 
 
@@ -447,7 +458,7 @@ if run_button and ticker:
         st.subheader("Paramètres Heston calibrés")
         st.dataframe(pd.Series(calib, name="params").to_frame())
 
-        st.subheader("Heatmaps Heston vs Black-Scholes")
+        st.subheader("Surfaces de Prix Heston vs Black-Scholes")
         S_grid, K_grid, call_heston, put_heston = compute_heston_heatmaps(
             calib,
             r=rf_rate,
@@ -487,10 +498,10 @@ if run_button and ticker:
         )
         st.dataframe(summary_heatmap)
 
-        fig_call_heston = plot_heatmap(call_heston, K_grid, S_grid, "Call Price (Heston)")
-        fig_put_heston = plot_heatmap(put_heston, K_grid, S_grid, "Put Price (Heston)")
-        fig_call_bs = plot_heatmap(call_bs, K_grid, S_grid, "Call Price (Black-Scholes)")
-        fig_put_bs = plot_heatmap(put_bs, K_grid, S_grid, "Put Price (Black-Scholes)")
+        fig_call_heston = plot_price_surface(call_heston, K_grid, S_grid, "Call Price (Heston)")
+        fig_put_heston = plot_price_surface(put_heston, K_grid, S_grid, "Put Price (Heston)")
+        fig_call_bs = plot_price_surface(call_bs, K_grid, S_grid, "Call Price (Black-Scholes)")
+        fig_put_bs = plot_price_surface(put_bs, K_grid, S_grid, "Put Price (Black-Scholes)")
 
         col_call_h, col_call_bs = st.columns(2)
         with col_call_h:
