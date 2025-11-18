@@ -291,7 +291,7 @@ with col_grid:
     step_strike = st.number_input("Step strike", value=5.0, min_value=1.0, max_value=20.0, step=1.0, key="step_strike")
     n_maturities = st.number_input("Nombre de maturités", value=10, min_value=3, max_value=20, step=1, key="n_maturities")
 
-run_button = st.button("🚀 Lancer l'analyse complète", type="primary", use_container_width=True)
+run_button = st.button("🚀 Lancer l'analyse complète", type="primary", width="stretch")
 
 st.divider()
 
@@ -309,13 +309,18 @@ if run_button:
         # Étape 2: Calibration Heston NN
         st.info("🧠 Calibration des paramètres Heston via réseau de neurones...")
         progress_bar = st.progress(0)
-        log_box = st.empty()
+        status_text = st.empty()
+        log_container = st.expander("📜 Logs de calibration", expanded=True)
+        log_messages = []
         
         def progress_cb(current: int, total: int) -> None:
             progress_bar.progress(current / total)
+            status_text.text(f"⏳ Itération {current}/{total} ({100*current/total:.1f}%)")
         
         def log_cb(msg: str) -> None:
-            log_box.text(msg)
+            log_messages.append(msg)
+            with log_container:
+                st.text("\n".join(log_messages[-15:]))  # Affiche les 15 dernières lignes
         
         calib = calibrate_heston_nn(
             calls_df,
@@ -328,7 +333,7 @@ if run_button:
             log_callback=log_cb,
         )
         progress_bar.empty()
-        log_box.empty()
+        status_text.empty()
         
         st.success("✓ Calibration terminée!")
         
@@ -396,9 +401,9 @@ if run_button:
         
         col_mc1, col_mc2 = st.columns(2)
         with col_mc1:
-            st.plotly_chart(fig_call_mc, use_container_width=True)
+            st.plotly_chart(fig_call_mc, width="stretch")
         with col_mc2:
-            st.plotly_chart(fig_put_mc, use_container_width=True)
+            st.plotly_chart(fig_put_mc, width="stretch")
         
         # Étape 4: Inversion BS pour IV surfaces
         st.info("🔄 Inversion Black-Scholes pour surfaces d'IV...")
@@ -462,9 +467,9 @@ if run_button:
         
         col_iv1, col_iv2 = st.columns(2)
         with col_iv1:
-            st.plotly_chart(fig_iv_call_3d, use_container_width=True)
+            st.plotly_chart(fig_iv_call_3d, width="stretch")
         with col_iv2:
-            st.plotly_chart(fig_iv_put_3d, use_container_width=True)
+            st.plotly_chart(fig_iv_put_3d, width="stretch")
         
         # Comparaison avec analytique Carr-Madan
         st.subheader("🔬 Comparaison: Monte Carlo vs Carr-Madan Analytique")
@@ -501,33 +506,7 @@ if run_button:
             height=500,
             showlegend=True
         )
-        st.plotly_chart(fig_compare, use_container_width=True)
-        
-        # Export des résultats
-        st.subheader("💾 Export des résultats")
-        results = []
-        for i, T_val in enumerate(T_grid):
-            for j, K_val in enumerate(K_grid):
-                results.append({
-                    'K': K_val,
-                    'T': T_val,
-                    'call_price_mc': call_prices_mc[i, j],
-                    'put_price_mc': put_prices_mc[i, j],
-                    'call_iv': iv_calls_mc[i, j],
-                    'put_iv': iv_puts_mc[i, j],
-                })
-        
-        df_results = pd.DataFrame(results)
-        
-        try:
-            out_dir = Path("data")
-            out_dir.mkdir(parents=True, exist_ok=True)
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            out_path = out_dir / f"heston_analysis_{ticker}_{ts}.csv"
-            df_results.to_csv(out_path, index=False)
-            st.success(f"✓ Résultats exportés: {out_path}")
-        except Exception as e:
-            st.warning(f"⚠ Erreur export CSV: {e}")
+        st.plotly_chart(fig_compare, width="stretch")
         
         st.balloons()
         st.success("🎉 Analyse complète terminée avec succès!")
