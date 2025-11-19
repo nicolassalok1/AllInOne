@@ -314,6 +314,7 @@ div_yield = st.sidebar.number_input("Dividende (q)", value=0.00, step=0.01, form
 T_mc = st.sidebar.number_input("Maturité T de l'option à calculer", value=1.0, min_value=0.1, max_value=5.0, step=0.1, help="Maturité fixe pour les heatmaps Monte Carlo (S vs K)")
 span_mc = st.sidebar.number_input("Span S & K autour du spot price", value=20.0, min_value=5.0, max_value=100.0, step=5.0, key="span_mc", help="Plage autour de S0 pour les grilles spot et strike MC")
 
+
 # Paramètres principaux sur l'écran
 st.header("⚙️ Paramètres de modélisation")
 
