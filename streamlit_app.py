@@ -29,7 +29,7 @@ st.write(
 # TODO : revenir à la ligne entre chaque étape
 
 # Import du module Heston torch
-from heston_torch import HestonParams, carr_madan_call_torch, carr_madan_put_torch
+from heston_torch import HestonParams, carr_madan_call_torch
 
 torch.set_default_dtype(torch.float64)
 DEVICE = torch.device("cpu")
@@ -406,8 +406,10 @@ if run_button:
         
         for i, T_val in enumerate(T_grid):
             call_anal = carr_madan_call_torch(S0_ref, rf_rate, div_yield, float(T_val), params_cm, Ks_t)
-            #TODO put_anal = parity put/call
-            put_anal = carr_madan_put_torch(S0_ref, rf_rate, div_yield, float(T_val), params_cm, Ks_t)
+            # Calculate put prices using put-call parity: P = C - S₀*e^(-q*T) + K*e^(-r*T)
+            discount_factor = torch.exp(-torch.tensor(rf_rate * T_val, dtype=torch.float64))
+            forward_factor = torch.exp(-torch.tensor(div_yield * T_val, dtype=torch.float64))
+            put_anal = call_anal - S0_ref * forward_factor + Ks_t * discount_factor
             call_prices_cm[i, :] = call_anal.detach().cpu().numpy()
             put_prices_cm[i, :] = put_anal.detach().cpu().numpy()
             cm_progress.progress((i + 1) / len(T_grid))
