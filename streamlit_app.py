@@ -25,9 +25,9 @@ st.write(
     "\n" \
     "2️⃣ Calibration automatique des paramètres Heston via réseau de neurones PyTorch "
     "\n" \
-    "3️⃣ Génération de heatmaps de prix par simulation Monte Carlo "
+    "3️⃣ Inversion Black-Scholes pour surfaces d'IV 3D interactives "
     "\n" \
-    "4️⃣ Inversion Black-Scholes pour surfaces d'IV 3D interactives "
+    "4️⃣ Génération de heatmaps de prix par simulation Monte Carlo "
     "\n **Comparez prix analytiques vs Monte Carlo et découvrez le smile de volatilité !**"
 )
 # Import du module Heston torch
@@ -511,49 +511,7 @@ if run_button:
         with col_mc2:
             st.plotly_chart(fig_put_mc, use_container_width=True)
         
-        # Étape 5: Inversion BS pour IV surfaces MC (grille S, K)
-        st.info(f"🔄 Calcul des IV Surfaces BS (depuis prix MC, T={T_mc:.2f})...")
-        
-        call_iv_mc = np.zeros_like(call_prices_mc)
-        
-        log_text.write("Inversion BS pour Calls MC...")
-        iv_mc_progress = st.progress(0)
-        
-        for i, S_val in enumerate(S_grid_mc):
-            for j, K_val in enumerate(K_grid_mc):
-                call_iv_mc[i, j] = implied_vol_option(
-                    call_prices_mc[i, j], S_val, K_val, T_mc, rf_rate, "call"
-                )
-            iv_mc_progress.progress((i + 1) / len(S_grid_mc))
-        
-        iv_mc_progress.empty()
-        st.success("✓ Inversion MC terminée")
-        
-        # Affichage 3D MC avec grille (S, K)
-        st.subheader(f"🌊 IV Surfaces 3D (Monte Carlo, T={T_mc:.2f} ans)")
-        
-        KK_mc, SS_mc = np.meshgrid(K_grid_mc, S_grid_mc)
-        
-        fig_iv_calls_mc = go.Figure(data=[go.Surface(
-            x=KK_mc,
-            y=SS_mc,
-            z=call_iv_mc,
-            colorscale='Plasma',
-            colorbar=dict(title="IV")
-        )])
-        fig_iv_calls_mc.update_layout(
-            title=f"IV Surface Calls BS (Heston MC, T={T_mc:.2f}) - {ticker}",
-            scene=dict(
-                xaxis=dict(title="Strike K"),
-                yaxis=dict(title="Spot S"),
-                zaxis=dict(title="Implied Volatility")
-            ),
-            height=600
-        )
-        
-        st.plotly_chart(fig_iv_calls_mc, use_container_width=True)
-        
-        # Comparaison Analytique vs MC
+         # Comparaison Analytique vs MC
         st.subheader(f"🔬 Comparaison: Monte Carlo vs Carr-Madan Analytique (T={T_mc:.2f} ans)")
         
         # Choisir un spot au milieu de la grille pour comparer
