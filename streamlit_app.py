@@ -313,6 +313,8 @@ rf_rate = st.sidebar.number_input("Taux sans risque (r)", value=0.02, step=0.01,
 div_yield = st.sidebar.number_input("Dividende (q)", value=0.00, step=0.01, format="%.3f")
 T_mc = st.sidebar.number_input("Maturité T de l'option à calculer", value=1.0, min_value=0.1, max_value=5.0, step=0.1, help="Maturité fixe pour les heatmaps Monte Carlo (S vs K)")
 span_mc = st.sidebar.number_input("Span S & K autour du spot price", value=20.0, min_value=5.0, max_value=100.0, step=5.0, key="span_mc", help="Plage autour de S0 pour les grilles spot et strike MC")
+step_strike = st.sidebar.number_input("Pas de strike", value=2.0, min_value=0.5, max_value=10.0, step=0.5, key="step_strike", help="Incrément entre chaque strike dans la grille")
+n_maturities = st.sidebar.number_input("Nombre de maturités", value=10, min_value=3, max_value=50, step=1, key="n_maturities", help="Nombre de maturités pour les surfaces IV")
 
 # Paramètres principaux sur l'écran
 st.header("⚙️ Paramètres de modélisation")
@@ -615,10 +617,10 @@ if run_button:
         
         # Graphiques de comparaison
         fig_compare = go.Figure()
-        fig_compare.add_trace(go.Scatter(x=K_grid_mc, y=call_prices_mc[idx_S, :], mode='lines+markers', name='MC Call', line=dict(color='blue')))
+        fig_compare.add_trace(go.Scatter(x=K_grid_mc, y=call_prices_mc[idx_S, :], mode='lines+markers', name='MC Call', line=dict(color='red')))
         fig_compare.add_trace(go.Scatter(x=K_grid_mc, y=call_anal_np, mode='lines', name='Carr-Madan Call', line=dict(color='red', dash='dash')))
         fig_compare.add_trace(go.Scatter(x=K_grid_mc, y=put_prices_mc[idx_S, :], mode='lines+markers', name='MC Put', line=dict(color='green')))
-        fig_compare.add_trace(go.Scatter(x=K_grid_mc, y=put_anal_np, mode='lines', name='Carr-Madan Put', line=dict(color='orange', dash='dash')))
+        fig_compare.add_trace(go.Scatter(x=K_grid_mc, y=put_anal_np, mode='lines', name='Carr-Madan Put', line=dict(color='green', dash='dash')))
         fig_compare.update_layout(
             title=f"Comparaison MC vs Analytique (S={S_compare:.2f}, T={T_mc:.2f} ans)",
             xaxis_title="Strike K",
