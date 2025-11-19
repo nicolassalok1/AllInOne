@@ -511,6 +511,109 @@ if run_button:
         with col_mc2:
             st.plotly_chart(fig_put_mc, use_container_width=True)
         
+        # Étape 4b: Monte Carlo Heston - Grilles de prix (K, T) pour S fixe (comme Carr-Madan)
+        st.info("🎲 Pricing Heston par Monte Carlo avec grilles (K, T)...")
+        
+        # Utiliser les mêmes grilles que Carr-Madan pour comparaison directe
+        call_prices_mc_kt = np.zeros((len(T_grid), len(K_grid)))
+        put_prices_mc_kt = np.zeros((len(T_grid), len(K_grid)))
+        
+        total_calcs_kt = len(T_grid) * len(K_grid)
+        calc_count_kt = 0
+        
+        log_text_kt = st.empty()
+        log_text_kt.write(f"Grille K (strike): {len(K_grid)} points de {K_grid[0]:.1f} à {K_grid[-1]:.1f}")
+        log_text_kt.write(f"Grille T (maturité): {len(T_grid)} points de {T_grid[0]:.2f} à {T_grid[-1]:.2f} ans")
+        log_text_kt.write(f"Spot fixe S: {S0_ref:.2f}")
+        log_text_kt.write(f"Total: {total_calcs_kt} prix à calculer\n")
+        
+        mc_kt_progress = st.progress(0)
+        
+        for i, T_val in enumerate(T_grid):
+            n_steps_kt = max(int(T_val * 252), 10)
+            for j, K_val in enumerate(K_grid):
+                call_prices_mc_kt[i, j] = heston_mc_pricer(
+                    S0_ref, K_val, T_val, rf_rate,
+                    calib['v0'], calib['theta'], calib['kappa'], calib['sigma'], calib['rho'],
+                    n_paths=n_paths, n_steps=n_steps_kt, option_type="call"
+                )
+                put_prices_mc_kt[i, j] = heston_mc_pricer(
+                    S0_ref, K_val, T_val, rf_rate,
+                    calib['v0'], calib['theta'], calib['kappa'], calib['sigma'], calib['rho'],
+                    n_paths=n_paths, n_steps=n_steps_kt, option_type="put"
+                )
+                calc_count_kt += 2
+                if calc_count_kt % 20 == 0 or calc_count_kt == total_calcs_kt * 2:
+                    pct_kt = 100 * calc_count_kt / (total_calcs_kt * 2)
+                    log_text_kt.write(f"  Progression: {pct_kt:.1f}% ({calc_count_kt}/{total_calcs_kt * 2} prix calculés)")
+                    mc_kt_progress.progress(pct_kt / 100)
+        
+        mc_kt_progress.empty()
+        st.success("✓ Pricing Monte Carlo (K, T) terminé!")
+        
+        # Calcul des IV pour grille (K, T) MC
+        st.info("🔄 Calcul des IV Surfaces BS (depuis prix MC K,T)...")
+        
+        call_iv_mc_kt = np.zeros_like(call_prices_mc_kt)
+        put_iv_mc_kt = np.zeros_like(put_prices_mc_kt)
+        
+        iv_kt_progress = st.progress(0)
+        
+        for i, T_val in enumerate(T_grid):
+            for j, K_val in enumerate(K_grid):
+                call_iv_mc_kt[i, j] = implied_vol_option(
+                    call_prices_mc_kt[i, j], S0_ref, K_val, T_val, rf_rate, "call"
+                )
+                put_iv_mc_kt[i, j] = implied_vol_option(
+                    put_prices_mc_kt[i, j], S0_ref, K_val, T_val, rf_rate, "put"
+                )
+            iv_kt_progress.progress((i + 1) / len(T_grid))
+        
+        iv_kt_progress.empty()
+        st.success("✓ IV Surfaces Monte Carlo (K, T) calculées!")
+        
+        # Affichage des surfaces 3D Monte Carlo (K, T)
+        st.subheader("🌊 IV Surfaces 3D Monte Carlo (K, T)")
+        
+        KK_mc_kt, TT_mc_kt = np.meshgrid(K_grid, T_grid)
+        
+        fig_iv_calls_mc_kt = go.Figure(data=[go.Surface(
+            x=KK_mc_kt,
+            y=TT_mc_kt,
+            z=call_iv_mc_kt,
+            colorscale='Plasma',
+            colorbar=dict(title="IV")
+        )])
+        fig_iv_calls_mc_kt.update_layout(
+            title=f"IV Surface Calls BS (Heston Monte Carlo K,T) - {ticker}",
+            scene=dict(
+                xaxis=dict(title="Strike K"),
+                yaxis=dict(title="Maturité T (années)"),
+                zaxis=dict(title="Implied Volatility")
+            ),
+            height=600
+        )
+        
+        fig_iv_puts_mc_kt = go.Figure(data=[go.Surface(
+            x=KK_mc_kt,
+            y=TT_mc_kt,
+            z=put_iv_mc_kt,
+            colorscale='Plasma',
+            colorbar=dict(title="IV")
+        )])
+        fig_iv_puts_mc_kt.update_layout(
+            title=f"IV Surface Puts BS (Heston Monte Carlo K,T) - {ticker}",
+            scene=dict(
+                xaxis=dict(title="Strike K"),
+                yaxis=dict(title="Maturité T (années)"),
+                zaxis=dict(title="Implied Volatility")
+            ),
+            height=600
+        )
+        
+        st.plotly_chart(fig_iv_calls_mc_kt, use_container_width=True)
+        st.plotly_chart(fig_iv_puts_mc_kt, use_container_width=True)
+        
         # Étape 5: Inversion BS pour IV surfaces MC (grille S, K)
         st.info(f"🔄 Calcul des IV Surfaces BS (depuis prix MC, T={T_mc:.2f})...")
         
@@ -591,6 +694,74 @@ if run_button:
             showlegend=True
         )
         st.plotly_chart(fig_compare, use_container_width=True)
+        
+        # Comparaison IV surfaces: Monte Carlo (K,T) vs Carr-Madan (K,T)
+        st.subheader("🔬 Comparaison IV Surfaces: Monte Carlo (K,T) vs Carr-Madan (K,T)")
+        
+        # Sélectionner une maturité pour comparer les smiles de volatilité
+        idx_T_compare = len(T_grid)//2
+        T_compare = T_grid[idx_T_compare]
+        
+        fig_iv_compare = go.Figure()
+        fig_iv_compare.add_trace(go.Scatter(
+            x=K_grid, 
+            y=call_iv_mc_kt[idx_T_compare, :], 
+            mode='lines+markers', 
+            name=f'MC Call IV', 
+            line=dict(color='blue', width=2)
+        ))
+        fig_iv_compare.add_trace(go.Scatter(
+            x=K_grid, 
+            y=call_iv_cm[idx_T_compare, :], 
+            mode='lines', 
+            name=f'Carr-Madan Call IV', 
+            line=dict(color='blue', dash='dash', width=2)
+        ))
+        fig_iv_compare.update_layout(
+            title=f"Smile de Volatilité Implicite: MC vs Carr-Madan (T={T_compare:.2f} ans)",
+            xaxis_title="Strike K",
+            yaxis_title="Volatilité Implicite",
+            height=500,
+            showlegend=True,
+            hovermode='x unified'
+        )
+        st.plotly_chart(fig_iv_compare, use_container_width=True)
+        
+        # Calcul des erreurs entre MC et Carr-Madan
+        st.subheader("📊 Analyse des écarts MC vs Carr-Madan")
+        
+        # Erreurs sur les prix
+        price_errors_call = np.abs(call_prices_mc_kt - call_prices_cm)
+        price_errors_put = np.abs(put_prices_mc_kt - put_prices_cm)
+        
+        # Erreurs sur les IV
+        iv_errors_call = np.abs(call_iv_mc_kt - call_iv_cm)
+        
+        col_err1, col_err2 = st.columns(2)
+        
+        with col_err1:
+            st.metric("Erreur moyenne prix Calls", f"{np.nanmean(price_errors_call):.6f}")
+            st.metric("Erreur max prix Calls", f"{np.nanmax(price_errors_call):.6f}")
+        
+        with col_err2:
+            st.metric("Erreur moyenne IV Calls", f"{np.nanmean(iv_errors_call):.6f}")
+            st.metric("Erreur max IV Calls", f"{np.nanmax(iv_errors_call):.6f}")
+        
+        # Heatmap des erreurs IV
+        fig_iv_error = go.Figure(data=go.Heatmap(
+            z=iv_errors_call,
+            x=K_grid,
+            y=T_grid,
+            colorscale='Reds',
+            colorbar=dict(title="Erreur Absolue IV")
+        ))
+        fig_iv_error.update_layout(
+            title=f"Heatmap des erreurs IV: |MC - Carr-Madan| - {ticker}",
+            xaxis_title="Strike K",
+            yaxis_title="Maturité T (années)",
+            height=500
+        )
+        st.plotly_chart(fig_iv_error, use_container_width=True)
         
         st.balloons()
         st.success("🎉 Analyse complète terminée avec succès!")
