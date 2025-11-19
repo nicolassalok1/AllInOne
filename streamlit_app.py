@@ -16,14 +16,22 @@ import yfinance as yf
 from datetime import datetime
 
 st.set_page_config(page_title="🚀 Heston Full Pipeline | Advanced Options Analytics", layout="wide")
-st.title("🚀 Pipeline Heston Complet: \nMarket Data → Heston params NN Calibration → Monte Carlo pricing → IV Surfaces from Carr-Madan")
-st.write(
-    "**Analyse complète de volatilité stochastique en une seule interface !** \n"
-    "\n 1️⃣ Téléchargement des données de marché en temps réel depuis yfinance "
-    "\n 2️⃣ Calibration automatique des paramètres Heston via réseau de neurones PyTorch "
-    "\n  3️⃣ Génération de heatmaps de prix par simulation Monte Carlo "
-    "\n4️⃣ Inversion Black-Scholes pour surfaces d'IV 3D interactives "
-    "\n **Comparez prix analytiques vs Monte Carlo et découvrez le smile de volatilité !**"
+st.title("🚀 Pipeline Heston Complet: \nMarket Data → Heston params NN Calibration → IV Surfaces from Carr-Madan → Monte Carlo pricing")
+
+st.markdown(
+    """
+    **Analyse complète de volatilité stochastique en une seule interface !**
+    
+    1️⃣ Téléchargement des données de marché en temps réel depuis yfinance
+    
+    2️⃣ Calibration automatique des paramètres Heston via réseau de neurones PyTorch
+    
+    3️⃣ Génération de heatmaps de prix par simulation Monte Carlo
+    
+    4️⃣ Inversion Black-Scholes pour surfaces d'IV 3D interactives
+    
+    **Comparez prix analytiques vs Monte Carlo et découvrez le smile de volatilité !**
+    """
 )
 
 # Import du module Heston torch
@@ -324,10 +332,10 @@ with col_mc:
     st.caption("ℹ️ Pas de temps = T × 252 (jours de trading)")
 
 with col_grid:
-    st.subheader("🔢 Grille de calcul")
+    st.subheader("🔢 Grille de calcul (IV surfaces analytiques)")
     span = st.number_input("Span autour de S0 (±)", value=20.0, min_value=5.0, max_value=200.0, step=5.0, key="span")
     step_strike = st.number_input("Step strike", value=1.0, min_value=1.0, max_value=20.0, step=1.0, key="step_strike")
-    n_maturities = st.number_input("Nombre de maturités", value=40, min_value=3, max_value=1000, step=1, key="n_maturities")
+    n_maturities = st.number_input("Step T", value=40, min_value=3, max_value=1000, step=1, key="n_maturities")
 
 # Sidebar: Heatmap configuration
 st.sidebar.header("🔥 Configuration Heatmap S-K")
@@ -443,7 +451,7 @@ if run_button:
         
         # Affichage des IV surfaces analytiques
         with col2:
-            st.subheader("📈 Grille de calcul")
+            st.subheader("📈 Grille de calcul ")
             st.write(f"**Strikes:** {K_grid[0]:.1f} → {K_grid[-1]:.1f} ({len(K_grid)} points)")
             st.write(f"**Maturités:** {T_grid[0]:.2f} → {T_grid[-1]:.2f} ans ({len(T_grid)} points)")
         
