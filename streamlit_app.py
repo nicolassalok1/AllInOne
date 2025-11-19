@@ -30,8 +30,6 @@ st.write(
     "4️⃣ Inversion Black-Scholes pour surfaces d'IV 3D interactives "
     "\n **Comparez prix analytiques vs Monte Carlo et découvrez le smile de volatilité !**"
 )
-# TODO : revenir à la ligne entre chaque étape
-
 # Import du module Heston torch
 from heston_torch import HestonParams, carr_madan_call_torch
 
@@ -210,42 +208,6 @@ def calibrate_heston_nn(
         "rho": float(params.rho.cpu().detach()),
         "v0": float(params.v0.cpu().detach()),
     }
-
-
-def heston_monte_carlo(S0: float, r: float, q: float, T: float, params: dict, K_grid: np.ndarray, n_paths: int = 50000) -> Tuple[np.ndarray, np.ndarray]:
-    """Simulation Monte Carlo du modèle Heston pour calculer les prix d'options."""
-    # Pas de temps basé sur T * 252 (jours de trading)
-    n_steps = max(int(T ), 10)  # Au moins 10 pas
-    dt = T / n_steps
-    sqrt_dt = np.sqrt(dt)
-    
-    kappa = params['kappa']
-    theta = params['theta']
-    sigma = params['sigma']
-    rho = params['rho']
-    v0 = params['v0']
-    
-    # Initialisation
-    S = np.full(n_paths, S0)
-    v = np.full(n_paths, v0)
-    
-    # Simulation
-    for _ in range(n_steps):
-        z1 = np.random.standard_normal(n_paths)
-        z2 = rho * z1 + np.sqrt(1 - rho**2) * np.random.standard_normal(n_paths)
-        
-        v_pos = np.maximum(v, 0)
-        S = S * np.exp((r - q - 0.5 * v_pos) * dt + np.sqrt(v_pos) * sqrt_dt * z1)
-        v = v + kappa * (theta - v_pos) * dt + sigma * np.sqrt(v_pos) * sqrt_dt * z2
-        v = np.maximum(v, 0)
-    
-    # Payoffs
-    discount = np.exp(-r * T)
-    call_prices = np.array([discount * np.maximum(S - K, 0).mean() for K in K_grid])
-    put_prices = np.array([discount * np.maximum(K - S, 0).mean() for K in K_grid])
-    
-    return call_prices, put_prices
-
 
 def bs_call(S: float, K: float, T: float, r: float, sigma: float) -> float:
     """Prix d'un call Black-Scholes."""
