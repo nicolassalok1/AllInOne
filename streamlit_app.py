@@ -311,9 +311,8 @@ st.sidebar.header("⚙️ Configuration de base")
 ticker = st.sidebar.text_input("Ticker", value="SPY")
 rf_rate = st.sidebar.number_input("Taux sans risque (r)", value=0.02, step=0.01, format="%.3f")
 div_yield = st.sidebar.number_input("Dividende (q)", value=0.00, step=0.01, format="%.3f")
-years_ahead = st.sidebar.number_input("Horizon (années)", value=2.5, min_value=0.1, max_value=5.0, step=0.1)
-T_mc = st.sidebar.number_input("Maturité T pour heatmaps MC", value=1.0, min_value=0.1, max_value=5.0, step=0.1, help="Maturité fixe pour les heatmaps Monte Carlo (S vs K)")
-span_mc = st.sidebar.number_input("Span S & K ±", value=20.0, min_value=5.0, max_value=100.0, step=5.0, key="span_mc", help="Plage autour de S0 pour les grilles spot et strike MC")
+T_mc = st.sidebar.number_input("Maturité T de l'option à calculer", value=1.0, min_value=0.1, max_value=5.0, step=0.1, help="Maturité fixe pour les heatmaps Monte Carlo (S vs K)")
+span_mc = st.sidebar.number_input("Span S & K autour du spot price", value=20.0, min_value=5.0, max_value=100.0, step=5.0, key="span_mc", help="Plage autour de S0 pour les grilles spot et strike MC")
 
 # Paramètres principaux sur l'écran
 st.header("⚙️ Paramètres de modélisation")
@@ -345,6 +344,7 @@ if run_button:
         st.info(f"📡 Téléchargement des données pour {ticker}...")
         
         # Étape 1: Téléchargement des données
+        years_ahead = 2.5  # Horizon de téléchargement fixé à 2.5 ans
         calls_df = download_options(ticker, "call", years_ahead)
         puts_df = download_options(ticker, "put", years_ahead)
         S0_ref = fetch_spot(ticker)
