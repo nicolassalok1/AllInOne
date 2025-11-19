@@ -20,13 +20,12 @@ st.title("🚀 Pipeline Heston Complet: \nMarket Data → Heston params NN Calib
 
 st.write(
     "**Analyse complète de volatilité stochastique en une seule interface !** \n"
-    "\n 1️⃣ Téléchargement des données de marché en temps réel depuis yfinance "
-    "\n 2️⃣ Calibration automatique des paramètres Heston via réseau de neurones PyTorch "
-    "\n  3️⃣ Génération de heatmaps de prix par simulation Monte Carlo "
-    "\n4️⃣ Inversion Black-Scholes pour surfaces d'IV 3D interactives "
-    "\n **Comparez prix analytiques vs Monte Carlo et découvrez le smile de volatilité !**"
+    "\n1️⃣ Téléchargement des données de marché en temps réel depuis yfinance \n"
+    "\n2️⃣ Calibration automatique des paramètres Heston via réseau de neurones PyTorch \n"
+    "\n3️⃣ Génération de heatmaps de prix par simulation Monte Carlo \n"
+    "\n4️⃣ Inversion Black-Scholes pour surfaces d'IV 3D interactives \n"
+    "\n**Comparez prix analytiques vs Monte Carlo et découvrez le smile de volatilité !**"
 )
-# TODO : revenir à la ligne entre chaque étape
 
 # Import du module Heston torch
 from heston_torch import HestonParams, carr_madan_call_torch, carr_madan_put_torch
