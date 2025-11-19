@@ -20,9 +20,9 @@ st.title("🚀 Pipeline Heston Complet: \nMarket Data → Heston params NN Calib
 
 st.write(
     "**Analyse complète de volatilité stochastique en une seule interface !** \n"
-    "\n 1️⃣ Téléchargement des données de marché en temps réel depuis yfinance "
-    "\n 2️⃣ Calibration automatique des paramètres Heston via réseau de neurones PyTorch "
-    "\n  3️⃣ Génération de heatmaps de prix par simulation Monte Carlo "
+    "\n1️⃣ Téléchargement des données de marché en temps réel depuis yfinance "
+    "\n2️⃣ Calibration automatique des paramètres Heston via réseau de neurones PyTorch "
+    "\n3️⃣ Génération de heatmaps de prix par simulation Monte Carlo "
     "\n4️⃣ Inversion Black-Scholes pour surfaces d'IV 3D interactives "
     "\n **Comparez prix analytiques vs Monte Carlo et découvrez le smile de volatilité !**"
 )
@@ -406,6 +406,7 @@ if run_button:
         
         for i, T_val in enumerate(T_grid):
             call_anal = carr_madan_call_torch(S0_ref, rf_rate, div_yield, float(T_val), params_cm, Ks_t)
+            #TODO put_anal = parity put/call
             put_anal = carr_madan_put_torch(S0_ref, rf_rate, div_yield, float(T_val), params_cm, Ks_t)
             call_prices_cm[i, :] = call_anal.detach().cpu().numpy()
             put_prices_cm[i, :] = put_anal.detach().cpu().numpy()
