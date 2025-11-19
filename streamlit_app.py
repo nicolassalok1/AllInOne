@@ -14,6 +14,7 @@ import streamlit as st
 import torch
 import yfinance as yf
 from datetime import datetime
+from scipy.interpolate import griddata
 
 st.set_page_config(page_title="🚀 Heston Full Pipeline | Advanced Options Analytics", layout="wide")
 st.title("🚀 Pipeline Heston Complet: \nMarket Data → Heston params NN Calibration → IV Surfaces from Carr-Madan → Monte Carlo pricing")
@@ -404,10 +405,8 @@ if run_button:
             st.write(f"**Strikes:** {K_grid[0]:.1f} → {K_grid[-1]:.1f} ({len(K_grid)} points)")
             st.write(f"**Maturités:** {T_grid[0]:.2f} → {T_grid[-1]:.2f} ans ({len(T_grid)} points)")
         
-        st.subheader("🌊 IV Surfaces 3D (Carr-Madan Analytique)")
-        
+        # Préparation des surfaces IV: marché (données directes) vs Carr-Madan analytiques
         KK_cm, TT_cm = np.meshgrid(K_grid, T_grid)
-        
         fig_iv_calls_cm = go.Figure(data=[go.Surface(
             x=KK_cm,
             y=TT_cm,
@@ -425,7 +424,54 @@ if run_button:
             height=600
         )
         
-        st.plotly_chart(fig_iv_calls_cm, use_container_width=True)
+        market_iv_df = calls_df.dropna(subset=["iv_market"]).copy()
+        market_iv_df = market_iv_df[market_iv_df["T"] >= MIN_IV_MATURITY]
+        market_iv_df = market_iv_df[market_iv_df["iv_market"] > 0]
+        
+        fig_iv_market = None
+        if len(market_iv_df) >= 5:
+            try:
+                points = market_iv_df[["K", "T"]].to_numpy()
+                values = market_iv_df["iv_market"].to_numpy()
+                market_iv_surface = griddata(points, values, (KK_cm, TT_cm), method="linear")
+                if market_iv_surface is None or np.all(np.isnan(market_iv_surface)):
+                    market_iv_surface = griddata(points, values, (KK_cm, TT_cm), method="nearest")
+                else:
+                    nan_mask = np.isnan(market_iv_surface)
+                    if nan_mask.any():
+                        market_iv_surface[nan_mask] = griddata(
+                            points, values, (KK_cm[nan_mask], TT_cm[nan_mask]), method="nearest"
+                        )
+                fig_iv_market = go.Figure(data=[go.Surface(
+                    x=KK_cm,
+                    y=TT_cm,
+                    z=market_iv_surface,
+                    colorscale='Viridis',
+                    colorbar=dict(title="IV marché")
+                )])
+                fig_iv_market.update_layout(
+                    title=f"IV Surface Calls (Marché) - {ticker}",
+                    scene=dict(
+                        xaxis=dict(title="Strike K"),
+                        yaxis=dict(title="Maturité T (années)"),
+                        zaxis=dict(title="Implied Volatility")
+                    ),
+                    height=600
+                )
+            except Exception:
+                fig_iv_market = None
+        
+        st.subheader("🌊 IV Surfaces 3D: Marché vs Carr-Madan")
+        col_iv_market, col_iv_carr = st.columns(2)
+        with col_iv_market:
+            st.caption("Surface IV marché (axes K & T)")
+            if fig_iv_market:
+                st.plotly_chart(fig_iv_market, use_container_width=True)
+            else:
+                st.info("Pas assez de points IV marché disponibles pour construire une surface (K, T).")
+        with col_iv_carr:
+            st.caption("Surface IV Carr-Madan (axes K & T)")
+            st.plotly_chart(fig_iv_calls_cm, use_container_width=True)
         
         # Étape 4: Monte Carlo Heston - Grilles de prix (S, K) pour T fixe
         st.info(f"🎲 Pricing Heston par Monte Carlo (T={T_mc:.2f} ans)...")
