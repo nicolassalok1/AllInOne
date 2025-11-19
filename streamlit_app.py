@@ -324,10 +324,10 @@ with col_mc:
     st.caption("ℹ️ Pas de temps = T × 252 (jours de trading)")
 
 with col_grid:
-    st.subheader("🔢 Grille de calcul")
+    st.subheader("🔢 Grille de calcul (IV surfaces analytiques)")
     span = st.number_input("Span autour de S0 (±)", value=20.0, min_value=5.0, max_value=200.0, step=5.0, key="span")
     step_strike = st.number_input("Step strike", value=1.0, min_value=1.0, max_value=20.0, step=1.0, key="step_strike")
-    n_maturities = st.number_input("Nombre de maturités", value=40, min_value=3, max_value=1000, step=1, key="n_maturities")
+    n_maturities = st.number_input("Step T", value=40, min_value=3, max_value=1000, step=1, key="n_maturities")
 
 run_button = st.button("🚀 Lancer l'analyse complète", type="primary", width="stretch")
 
@@ -435,7 +435,7 @@ if run_button:
         
         # Affichage des IV surfaces analytiques
         with col2:
-            st.subheader("📈 Grille de calcul")
+            st.subheader("📈 Grille de calcul ")
             st.write(f"**Strikes:** {K_grid[0]:.1f} → {K_grid[-1]:.1f} ({len(K_grid)} points)")
             st.write(f"**Maturités:** {T_grid[0]:.2f} → {T_grid[-1]:.2f} ans ({len(T_grid)} points)")
         
