@@ -16,7 +16,8 @@ import yfinance as yf
 from datetime import datetime
 
 st.set_page_config(page_title="🚀 Heston Full Pipeline | Advanced Options Analytics", layout="wide")
-st.title("🚀 Pipeline Heston Complet: \nMarket Data → Heston params NN Calibration → Monte Carlo pricing → IV Surfaces from Carr-Madan")
+st.title("🚀 Pipeline Heston Complet: \nMarket Data → Heston params NN Calibration → IV Surfaces from Carr-Madan → Monte Carlo pricing")
+
 st.write(
     "**Analyse complète de volatilité stochastique en une seule interface !** \n"
     "\n 1️⃣ Téléchargement des données de marché en temps réel depuis yfinance "
@@ -25,6 +26,7 @@ st.write(
     "\n4️⃣ Inversion Black-Scholes pour surfaces d'IV 3D interactives "
     "\n **Comparez prix analytiques vs Monte Carlo et découvrez le smile de volatilité !**"
 )
+# TODO : revenir à la ligne entre chaque étape
 
 # Import du module Heston torch
 from heston_torch import HestonParams, carr_madan_call_torch, carr_madan_put_torch
