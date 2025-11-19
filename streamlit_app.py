@@ -314,7 +314,6 @@ div_yield = st.sidebar.number_input("Dividende (q)", value=0.00, step=0.01, form
 T_mc = st.sidebar.number_input("Maturité T de l'option à calculer", value=1.0, min_value=0.1, max_value=5.0, step=0.1, help="Maturité fixe pour les heatmaps Monte Carlo (S vs K)")
 span_mc = st.sidebar.number_input("Span S & K autour du spot price", value=20.0, min_value=5.0, max_value=100.0, step=5.0, key="span_mc", help="Plage autour de S0 pour les grilles spot et strike MC")
 
-
 # Paramètres principaux sur l'écran
 st.header("⚙️ Paramètres de modélisation")
 
@@ -405,10 +404,12 @@ if run_button:
         
         for i, T_val in enumerate(T_grid):
             call_anal = carr_madan_call_torch(S0_ref, rf_rate, div_yield, float(T_val), params_cm, Ks_t)
+
             # Calculate put prices using put-call parity: P = C - S₀*e^(-q*T) + K*e^(-r*T)
             discount_factor = torch.exp(-torch.tensor(rf_rate * T_val, dtype=torch.float64))
             forward_factor = torch.exp(-torch.tensor(div_yield * T_val, dtype=torch.float64))
             put_anal = call_anal - S0_ref * forward_factor + Ks_t * discount_factor
+
             call_prices_cm[i, :] = call_anal.detach().cpu().numpy()
             put_prices_cm[i, :] = put_anal.detach().cpu().numpy()
             cm_progress.progress((i + 1) / len(T_grid))
