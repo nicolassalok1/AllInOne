@@ -16,22 +16,58 @@ import yfinance as yf
 from datetime import datetime
 
 st.set_page_config(page_title="🚀 Heston Full Pipeline | Advanced Options Analytics", layout="wide")
-st.title("🚀 Pipeline Heston Complet: Market Data → Heston params NN Calibration → Monte Carlo pricing → IV Surfaces from Carr-Madan")
+st.title("🚀 Pipeline Heston Complet: \nMarket Data → Heston params NN Calibration → Monte Carlo pricing → IV Surfaces from Carr-Madan")
 st.write(
-    "**Analyse complète de volatilité stochastique en une seule interface !** "
-    "\n1️⃣ Téléchargement des données de marché en temps réel depuis yfinance "
-    "\n2️⃣ Calibration automatique des paramètres Heston via réseau de neurones PyTorch "
-    "\n3️⃣ Génération de heatmaps de prix par simulation Monte Carlo "
+    "**Analyse complète de volatilité stochastique en une seule interface !** \n"
+    "\n 1️⃣ Téléchargement des données de marché en temps réel depuis yfinance "
+    "\n 2️⃣ Calibration automatique des paramètres Heston via réseau de neurones PyTorch "
+    "\n  3️⃣ Génération de heatmaps de prix par simulation Monte Carlo "
     "\n4️⃣ Inversion Black-Scholes pour surfaces d'IV 3D interactives "
-    "\n**Comparez prix analytiques vs Monte Carlo et découvrez le smile de volatilité !**"
+    "\n **Comparez prix analytiques vs Monte Carlo et découvrez le smile de volatilité !**"
 )
 
 # Import du module Heston torch
-from heston_torch import HestonParams, carr_madan_call_torch, carr_madan_put_torch
+from heston_torch import HestonParams, carr_madan_call_torch
 
 torch.set_default_dtype(torch.float64)
 DEVICE = torch.device("cpu")
 MIN_IV_MATURITY = 0.1
+
+
+def heston_mc_pricer(
+    S0: float, K: float, T: float, r: float,
+    v0: float, theta: float, kappa: float, sigma_v: float, rho: float,
+    n_paths: int = 50000, n_steps: int = 100, option_type: str = "call"
+) -> float:
+    """Pricer Monte Carlo pour options européennes sous Heston."""
+    dt = T / n_steps
+    sqrt_dt = math.sqrt(dt)
+    
+    # Initialisation
+    S = np.full(n_paths, S0)
+    v = np.full(n_paths, v0)
+    
+    # Simulation
+    for _ in range(n_steps):
+        Z1 = np.random.randn(n_paths)
+        Z2 = np.random.randn(n_paths)
+        Z_S = Z1
+        Z_v = rho * Z1 + math.sqrt(1 - rho**2) * Z2
+        
+        # Euler pour S
+        S = S * np.exp((r - 0.5 * np.maximum(v, 0)) * dt + np.sqrt(np.maximum(v, 0)) * sqrt_dt * Z_S)
+        
+        # Euler pour v avec troncation
+        v = v + kappa * (theta - np.maximum(v, 0)) * dt + sigma_v * np.sqrt(np.maximum(v, 0)) * sqrt_dt * Z_v
+        v = np.maximum(v, 0)  # Troncation
+    
+    # Payoff
+    if option_type == "call":
+        payoff = np.maximum(S - K, 0)
+    else:
+        payoff = np.maximum(K - S, 0)
+    
+    return math.exp(-r * T) * np.mean(payoff)
 
 
 def fetch_spot(symbol: str) -> float:
@@ -156,7 +192,7 @@ def calibrate_heston_nn(
         
         if progress_callback:
             progress_callback(iteration + 1, max_iters)
-        if log_callback and (iteration % 10 == 0 or iteration == max_iters - 1):
+        if log_callback:
             log_callback(f"Iter {iteration + 1}/{max_iters} | Loss = {loss_val.item():.6f}")
     
     params = HestonParams.from_unconstrained(u[0], u[1], u[2], u[3], u[4])
@@ -170,8 +206,10 @@ def calibrate_heston_nn(
     }
 
 
-def heston_monte_carlo(S0: float, r: float, q: float, T: float, params: dict, K_grid: np.ndarray, n_paths: int = 50000, n_steps: int = 100) -> Tuple[np.ndarray, np.ndarray]:
+def heston_monte_carlo(S0: float, r: float, q: float, T: float, params: dict, K_grid: np.ndarray, n_paths: int = 50000) -> Tuple[np.ndarray, np.ndarray]:
     """Simulation Monte Carlo du modèle Heston pour calculer les prix d'options."""
+    # Pas de temps basé sur T * 252 (jours de trading)
+    n_steps = max(int(T ), 10)  # Au moins 10 pas
     dt = T / n_steps
     sqrt_dt = np.sqrt(dt)
     
@@ -276,20 +314,20 @@ col_nn, col_mc, col_grid = st.columns(3)
 
 with col_nn:
     st.subheader("🎯 Calibration NN")
-    max_quotes = st.number_input("Max points calibration", value=1000, min_value=10, step=50, key="max_quotes")
-    max_iters = st.number_input("Itérations NN", value=100, min_value=10, max_value=1000, step=10, key="max_iters")
-    lr = st.number_input("Learning rate", value=0.005, min_value=0.0001, max_value=0.1, step=0.001, format="%.4f", key="lr")
+    max_iters = st.number_input("Itérations NN", value=10, min_value=10, max_value=1000, step=10, key="max_iters")
+    st.caption("ℹ️ Learning rate fixé à 0.05")
+    st.caption("ℹ️ Max points = 1000")
 
 with col_mc:
     st.subheader("📊 Monte Carlo")
-    n_paths = st.number_input("Nombre de trajectoires", value=50000, min_value=1000, max_value=200000, step=1000, key="n_paths")
-    n_steps = st.number_input("Pas de temps", value=100, min_value=10, max_value=500, step=10, key="n_steps")
+    n_paths = st.number_input("Nombre de trajectoires", value=10000, min_value=1000, max_value=200000, step=1000, key="n_paths")
+    st.caption("ℹ️ Pas de temps = T × 252 (jours de trading)")
 
 with col_grid:
     st.subheader("🔢 Grille de calcul")
-    span = st.number_input("Span autour de S0 (±)", value=50.0, min_value=5.0, max_value=200.0, step=5.0, key="span")
-    step_strike = st.number_input("Step strike", value=5.0, min_value=1.0, max_value=20.0, step=1.0, key="step_strike")
-    n_maturities = st.number_input("Nombre de maturités", value=10, min_value=3, max_value=20, step=1, key="n_maturities")
+    span = st.number_input("Span autour de S0 (±)", value=20.0, min_value=5.0, max_value=200.0, step=5.0, key="span")
+    step_strike = st.number_input("Step strike", value=1.0, min_value=1.0, max_value=20.0, step=1.0, key="step_strike")
+    n_maturities = st.number_input("Nombre de maturités", value=40, min_value=3, max_value=1000, step=1, key="n_maturities")
 
 run_button = st.button("🚀 Lancer l'analyse complète", type="primary", width="stretch")
 
@@ -311,6 +349,7 @@ if run_button:
         progress_bar = st.progress(0)
         status_text = st.empty()
         log_container = st.expander("📜 Logs de calibration", expanded=True)
+        log_placeholder = log_container.empty()
         log_messages = []
         
         def progress_cb(current: int, total: int) -> None:
@@ -319,16 +358,15 @@ if run_button:
         
         def log_cb(msg: str) -> None:
             log_messages.append(msg)
-            with log_container:
-                st.text("\n".join(log_messages[-15:]))  # Affiche les 15 dernières lignes
+            log_placeholder.text("\n".join(log_messages))  # Affiche tous les messages
         
         calib = calibrate_heston_nn(
             calls_df,
             r=rf_rate,
             q=div_yield,
-            max_points=max_quotes,
+            max_points=1000,
             max_iters=max_iters,
-            lr=lr,
+            lr=0.05,
             progress_callback=progress_cb,
             log_callback=log_cb,
         )
@@ -342,58 +380,80 @@ if run_button:
             st.subheader("📊 Paramètres Heston calibrés")
             st.dataframe(pd.Series(calib, name="Valeur").to_frame())
         
-        # Étape 3: Monte Carlo Heston - Grilles de prix
-        st.info("🎲 Génération des heatmaps de prix par Monte Carlo...")
+        # Étape 3: Monte Carlo Heston - Grilles de prix (méthode notebook)
+        st.info("🎲 Pricing Heston par Monte Carlo...")
         
+        # Grilles pour Heston: K et T
         K_grid = np.arange(S0_ref - span, S0_ref + span + step_strike, step_strike)
-        T_grid = np.linspace(0.1, 2.0, n_maturities)
+        T_grid = np.linspace(0.1, years_ahead, n_maturities)
+        
+        log_text = st.empty()
+        log_text.write(f"Grille K: {len(K_grid)} points de {K_grid[0]:.1f} à {K_grid[-1]:.1f}")
+        log_text.write(f"Grille T: {len(T_grid)} points de {T_grid[0]:.1f} à {T_grid[-1]:.1f} années")
+        log_text.write(f"Total: {len(K_grid) * len(T_grid)} prix à calculer\n")
         
         call_prices_mc = np.zeros((len(T_grid), len(K_grid)))
         put_prices_mc = np.zeros((len(T_grid), len(K_grid)))
         
+        total_calcs = len(T_grid) * len(K_grid)
+        calc_count = 0
+        
+        log_text.write("Démarrage du pricing Monte Carlo...")
         mc_progress = st.progress(0)
+        
         for i, T_val in enumerate(T_grid):
-            call_vec, put_vec = heston_monte_carlo(S0_ref, rf_rate, div_yield, T_val, calib, K_grid, n_paths, n_steps)
-            call_prices_mc[i, :] = call_vec
-            put_prices_mc[i, :] = put_vec
-            mc_progress.progress((i + 1) / len(T_grid))
+            for j, K_val in enumerate(K_grid):
+                call_prices_mc[i, j] = heston_mc_pricer(
+                    S0_ref, K_val, T_val, rf_rate,
+                    calib['v0'], calib['theta'], calib['kappa'], calib['sigma'], calib['rho'],
+                    n_paths=n_paths, n_steps=int(T_val * 252), option_type="call"
+                )
+                put_prices_mc[i, j] = heston_mc_pricer(
+                    S0_ref, K_val, T_val, rf_rate,
+                    calib['v0'], calib['theta'], calib['kappa'], calib['sigma'], calib['rho'],
+                    n_paths=n_paths, n_steps=int(T_val * 252), option_type="put"
+                )
+                calc_count += 2
+                if calc_count % 20 == 0 or calc_count == total_calcs * 2:
+                    pct = 100 * calc_count / (total_calcs * 2)
+                    log_text.write(f"  Progression: {pct:.1f}% ({calc_count}/{total_calcs * 2} prix calculés)")
+                    mc_progress.progress(pct / 100)
+        
         mc_progress.empty()
+        st.success("✓ Pricing Monte Carlo terminé!")
         
-        st.success("✓ Heatmaps Monte Carlo générées!")
-        
-        # Affichage des heatmaps
+        # Affichage des heatmaps (méthode notebook)
         with col2:
             st.subheader("📈 Grille de calcul")
             st.write(f"**Strikes:** {K_grid[0]:.1f} → {K_grid[-1]:.1f} ({len(K_grid)} points)")
             st.write(f"**Maturités:** {T_grid[0]:.2f} → {T_grid[-1]:.2f} ans ({len(T_grid)} points)")
             st.write(f"**Trajectoires MC:** {n_paths:,}")
-            st.write(f"**Pas de temps:** {n_steps}")
         
         st.subheader("🔥 Heatmaps des prix Monte Carlo Heston")
         
-        fig_call_mc = go.Figure(data=[go.Heatmap(
+        fig_call_mc = go.Figure(data=go.Heatmap(
+            z=call_prices_mc,
             x=K_grid,
             y=T_grid,
-            z=call_prices_mc,
             colorscale='Viridis',
-            colorbar=dict(title="Prix")
-        )])
+            colorbar=dict(title="Prix Call Heston")
+        ))
         fig_call_mc.update_layout(
-            title=f"Call Prices (Heston Monte Carlo) - {ticker}",
+            title=f"Heatmap Prix Calls Heston (MC) - {ticker}",
             xaxis_title="Strike K",
             yaxis_title="Maturité T (années)",
             height=500
         )
         
-        fig_put_mc = go.Figure(data=[go.Heatmap(
+        fig_put_mc = go.Figure(data=go.Heatmap(
+            z=put_prices_mc,
             x=K_grid,
             y=T_grid,
-            z=put_prices_mc,
             colorscale='Viridis',
-            colorbar=dict(title="Prix")
-        )])
+            colorbar=dict(title="Prix Put Heston")
+        ))
         fig_put_mc.update_layout(
-            title=f"Put Prices (Heston Monte Carlo) - {ticker}",
+            title=f"Heatmap Prix Puts Heston (MC) - {ticker}",
             xaxis_title="Strike K",
             yaxis_title="Maturité T (années)",
             height=500
@@ -405,71 +465,72 @@ if run_button:
         with col_mc2:
             st.plotly_chart(fig_put_mc, width="stretch")
         
-        # Étape 4: Inversion BS pour IV surfaces
-        st.info("🔄 Inversion Black-Scholes pour surfaces d'IV...")
+        # Étape 4: Inversion BS pour IV surfaces (méthode notebook)
+        st.info("🔄 Calcul des IV Surfaces BS (depuis prix Heston)...")
         
-        iv_calls_mc = np.zeros_like(call_prices_mc)
-        iv_puts_mc = np.zeros_like(put_prices_mc)
+        call_iv_heston = np.zeros_like(call_prices_mc)
+        put_iv_heston = np.zeros_like(put_prices_mc)
         
+        log_text.write("Inversion BS pour Calls et Puts...")
         iv_progress = st.progress(0)
-        total_calcs = len(T_grid) * len(K_grid)
-        calc_count = 0
         
         for i, T_val in enumerate(T_grid):
             for j, K_val in enumerate(K_grid):
-                iv_calls_mc[i, j] = implied_vol_option(call_prices_mc[i, j], S0_ref, K_val, T_val, rf_rate, 'call')
-                iv_puts_mc[i, j] = implied_vol_option(put_prices_mc[i, j], S0_ref, K_val, T_val, rf_rate, 'put')
-                calc_count += 2
-                if calc_count % 20 == 0:
-                    iv_progress.progress(calc_count / (2 * total_calcs))
+                call_iv_heston[i, j] = implied_vol_option(
+                    call_prices_mc[i, j], S0_ref, K_val, T_val, rf_rate, "call"
+                )
+                put_iv_heston[i, j] = implied_vol_option(
+                    put_prices_mc[i, j], S0_ref, K_val, T_val, rf_rate, "put"
+                )
+            iv_progress.progress((i + 1) / len(T_grid))
+        
         iv_progress.empty()
+        st.success("✓ Inversion terminée")
         
-        st.success("✓ Surfaces d'IV calculées!")
-        
-        # Surfaces 3D
+        # Affichage 3D (méthode notebook)
         st.subheader("🌊 Surfaces de Volatilité Implicite 3D")
         
-        KK, TT = np.meshgrid(K_grid, T_grid)
+        KK_heston, TT_heston = np.meshgrid(K_grid, T_grid)
         
-        fig_iv_call_3d = go.Figure(data=[go.Surface(
-            x=KK,
-            y=TT,
-            z=iv_calls_mc,
+        fig_iv_calls_heston = go.Figure(data=[go.Surface(
+            x=KK_heston,
+            y=TT_heston,
+            z=call_iv_heston,
             colorscale='Viridis',
             colorbar=dict(title="IV")
         )])
-        fig_iv_call_3d.update_layout(
-            title=f"IV Surface Calls (depuis Heston MC) - {ticker}",
+        fig_iv_calls_heston.update_layout(
+            title=f"IV Surface Calls BS (depuis Heston MC) - {ticker}",
             scene=dict(
-                xaxis_title="Strike K",
-                yaxis_title="Maturité T (années)",
-                zaxis_title="Implied Volatility"
+                xaxis=dict(title="Strike K"),
+                yaxis=dict(title="Maturité T (années)"),
+                zaxis=dict(title="Implied Volatility")
             ),
             height=600
         )
         
-        fig_iv_put_3d = go.Figure(data=[go.Surface(
-            x=KK,
-            y=TT,
-            z=iv_puts_mc,
+        fig_iv_puts_heston = go.Figure(data=[go.Surface(
+            x=KK_heston,
+            y=TT_heston,
+            z=put_iv_heston,
             colorscale='Viridis',
             colorbar=dict(title="IV")
         )])
-        fig_iv_put_3d.update_layout(
-            title=f"IV Surface Puts (depuis Heston MC) - {ticker}",
+        fig_iv_puts_heston.update_layout(
+            title=f"IV Surface Puts BS (depuis Heston MC) - {ticker}",
             scene=dict(
-                xaxis_title="Strike K",
-                yaxis_title="Maturité T (années)",
-                zaxis_title="Implied Volatility"
+                xaxis=dict(title="Strike K"),
+                yaxis=dict(title="Maturité T (années)"),
+                zaxis=dict(title="Implied Volatility")
             ),
             height=600
         )
         
         col_iv1, col_iv2 = st.columns(2)
         with col_iv1:
-            st.plotly_chart(fig_iv_call_3d, width="stretch")
+            st.plotly_chart(fig_iv_calls_heston, width="stretch")
         with col_iv2:
-            st.plotly_chart(fig_iv_put_3d, width="stretch")
+            st.plotly_chart(fig_iv_puts_heston, width="stretch")
         
         # Comparaison avec analytique Carr-Madan
         st.subheader("🔬 Comparaison: Monte Carlo vs Carr-Madan Analytique")
@@ -488,7 +549,13 @@ if run_button:
         
         Ks_t = torch.tensor(K_grid, dtype=torch.float64)
         call_anal = carr_madan_call_torch(S0_ref, rf_rate, div_yield, float(T_compare), params_cm, Ks_t)
-        put_anal = carr_madan_put_torch(S0_ref, rf_rate, div_yield, float(T_compare), params_cm, Ks_t)
+
+        # Utilisation de la parité put/call pour le put analytique: Put = Call - S0*e^(-q*T) + K*e^(-r*T)
+        S0_t = torch.tensor(S0_ref, dtype=torch.float64)
+        T_t = torch.tensor(T_compare, dtype=torch.float64)
+        r_t = torch.tensor(rf_rate, dtype=torch.float64)
+        q_t = torch.tensor(div_yield, dtype=torch.float64)
+        put_anal = call_anal - S0_t * torch.exp(-q_t * T_t) + Ks_t * torch.exp(-r_t * T_t)
         
         call_anal_np = call_anal.detach().cpu().numpy()
         put_anal_np = put_anal.detach().cpu().numpy()
