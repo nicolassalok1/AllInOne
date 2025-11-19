@@ -622,7 +622,7 @@ if run_button:
         fig_compare.add_trace(go.Scatter(x=K_grid_mc, y=put_prices_mc[idx_S, :], mode='lines+markers', name='MC Put', line=dict(color='green')))
         fig_compare.add_trace(go.Scatter(x=K_grid_mc, y=put_anal_np, mode='lines', name='Carr-Madan Put', line=dict(color='green', dash='dash')))
         fig_compare.update_layout(
-            title=f"Comparaison MC vs Analytique (S={S_compare:.2f}, T={T_mc:.2f} ans)",
+            title=f"Comparaison MC vs Analytique (S_0={S_compare:.2f}, T={T_mc:.2f} ans)",
             xaxis_title="Strike K",
             yaxis_title="Prix",
             height=500,
