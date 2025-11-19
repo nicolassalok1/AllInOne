@@ -329,6 +329,14 @@ with col_grid:
     step_strike = st.number_input("Step strike", value=1.0, min_value=1.0, max_value=20.0, step=1.0, key="step_strike")
     n_maturities = st.number_input("Nombre de maturités", value=40, min_value=3, max_value=1000, step=1, key="n_maturities")
 
+# Sidebar: Heatmap configuration
+st.sidebar.header("🔥 Configuration Heatmap S-K")
+st.sidebar.caption("Pour la heatmap: prix en fonction de S et K pour un T donné")
+heatmap_T = st.sidebar.number_input("Maturité T pour heatmap (années)", value=1.0, min_value=0.1, max_value=5.0, step=0.1, format="%.2f", key="heatmap_T")
+heatmap_S_span = st.sidebar.number_input("Span autour de S0 pour heatmap (±)", value=20.0, min_value=5.0, max_value=100.0, step=5.0, key="heatmap_S_span")
+heatmap_S_points = st.sidebar.number_input("Nombre de points S", value=15, min_value=5, max_value=50, step=1, key="heatmap_S_points")
+heatmap_K_points = st.sidebar.number_input("Nombre de points K", value=15, min_value=5, max_value=50, step=1, key="heatmap_K_points")
+
 run_button = st.button("🚀 Lancer l'analyse complète", type="primary", width="stretch")
 
 st.divider()
@@ -483,35 +491,42 @@ if run_button:
         with col_iv2:
             st.plotly_chart(fig_iv_puts_cm, width="stretch")
         
-        # Étape 4: Monte Carlo Heston - Grilles de prix (méthode notebook)
-        #TODO : pour la heatmap, je veux les prix en fonction de S et K pour un T donné dans la sidebar
-        st.info("🎲 Pricing Heston par Monte Carlo...")
+        # Étape 4: Monte Carlo Heston - Heatmaps S-K pour un T donné
+        st.info(f"🎲 Pricing Heston par Monte Carlo pour heatmap S-K (T={heatmap_T:.2f} ans)...")
+        
+        # Grille S (spot prices)
+        S_grid = np.linspace(S0_ref - heatmap_S_span, S0_ref + heatmap_S_span, heatmap_S_points)
+        
+        # Grille K (strikes) - centered around S0_ref
+        K_min = S0_ref - heatmap_S_span
+        K_max = S0_ref + heatmap_S_span
+        K_grid_heatmap = np.linspace(K_min, K_max, heatmap_K_points)
         
         log_text = st.empty()
-        log_text.write(f"Grille K: {len(K_grid)} points de {K_grid[0]:.1f} à {K_grid[-1]:.1f}")
-        log_text.write(f"Grille T: {len(T_grid)} points de {T_grid[0]:.1f} à {T_grid[-1]:.1f} années")
-        log_text.write(f"Total: {len(K_grid) * len(T_grid)} prix à calculer\n")
+        log_text.write(f"Grille S: {len(S_grid)} points de {S_grid[0]:.1f} à {S_grid[-1]:.1f}")
+        log_text.write(f"Grille K: {len(K_grid_heatmap)} points de {K_grid_heatmap[0]:.1f} à {K_grid_heatmap[-1]:.1f}")
+        log_text.write(f"Total: {len(S_grid) * len(K_grid_heatmap)} prix à calculer pour T={heatmap_T:.2f} ans\n")
         
-        call_prices_mc = np.zeros((len(T_grid), len(K_grid)))
-        put_prices_mc = np.zeros((len(T_grid), len(K_grid)))
+        call_prices_mc = np.zeros((len(S_grid), len(K_grid_heatmap)))
+        put_prices_mc = np.zeros((len(S_grid), len(K_grid_heatmap)))
         
-        total_calcs = len(T_grid) * len(K_grid)
+        total_calcs = len(S_grid) * len(K_grid_heatmap)
         calc_count = 0
         
         log_text.write("Démarrage du pricing Monte Carlo...")
         mc_progress = st.progress(0)
         
-        for i, T_val in enumerate(T_grid):
-            for j, K_val in enumerate(K_grid):
+        for i, S_val in enumerate(S_grid):
+            for j, K_val in enumerate(K_grid_heatmap):
                 call_prices_mc[i, j] = heston_mc_pricer(
-                    S0_ref, K_val, T_val, rf_rate,
+                    S_val, K_val, heatmap_T, rf_rate,
                     calib['v0'], calib['theta'], calib['kappa'], calib['sigma'], calib['rho'],
-                    n_paths=n_paths, n_steps=int(T_val * 252), option_type="call"
+                    n_paths=n_paths, n_steps=int(heatmap_T * 252), option_type="call"
                 )
                 put_prices_mc[i, j] = heston_mc_pricer(
-                    S0_ref, K_val, T_val, rf_rate,
+                    S_val, K_val, heatmap_T, rf_rate,
                     calib['v0'], calib['theta'], calib['kappa'], calib['sigma'], calib['rho'],
-                    n_paths=n_paths, n_steps=int(T_val * 252), option_type="put"
+                    n_paths=n_paths, n_steps=int(heatmap_T * 252), option_type="put"
                 )
                 calc_count += 2
                 if calc_count % 20 == 0 or calc_count == total_calcs * 2:
@@ -522,45 +537,45 @@ if run_button:
         mc_progress.empty()
         st.success("✓ Pricing Monte Carlo terminé!")
         
-        # Affichage des heatmaps MC
-        st.subheader("🔥 Heatmaps des prix Monte Carlo Heston")
+        # Affichage des heatmaps MC (S vs K)
+        st.subheader(f"🔥 Heatmaps des prix Monte Carlo Heston (S vs K, T={heatmap_T:.2f} ans)")
         
         fig_call_mc = go.Figure(data=go.Heatmap(
             z=call_prices_mc,
-            x=K_grid,
-            y=T_grid,
+            x=K_grid_heatmap,
+            y=S_grid,
             colorscale='Viridis',
             colorbar=dict(title="Prix Call Heston")
         ))
         fig_call_mc.update_layout(
-            title=f"Heatmap Prix Calls Heston (MC) - {ticker}",
+            title=f"Heatmap Prix Calls Heston (MC) - {ticker} (T={heatmap_T:.2f})",
             xaxis_title="Strike K",
-            yaxis_title="Maturité T (années)",
+            yaxis_title="Spot S",
             height=500
         )
         
         fig_put_mc = go.Figure(data=go.Heatmap(
             z=put_prices_mc,
-            x=K_grid,
-            y=T_grid,
+            x=K_grid_heatmap,
+            y=S_grid,
             colorscale='Viridis',
             colorbar=dict(title="Prix Put Heston")
         ))
         fig_put_mc.update_layout(
-            title=f"Heatmap Prix Puts Heston (MC) - {ticker}",
+            title=f"Heatmap Prix Puts Heston (MC) - {ticker} (T={heatmap_T:.2f})",
             xaxis_title="Strike K",
-            yaxis_title="Maturité T (années)",
+            yaxis_title="Spot S",
             height=500
         )
         
         col_mc1, col_mc2 = st.columns(2)
         with col_mc1:
-            st.plotly_chart(fig_call_mc, width="stretch")
+            st.plotly_chart(fig_call_mc, use_container_width=True)
         with col_mc2:
-            st.plotly_chart(fig_put_mc, width="stretch")
+            st.plotly_chart(fig_put_mc, use_container_width=True)
         
-        # Étape 5: Inversion BS pour IV surfaces MC (méthode notebook)
-        st.info("🔄 Calcul des IV Surfaces BS (depuis prix MC)...")
+        # Étape 5: Inversion BS pour IV surfaces MC (S-K heatmap)
+        st.info(f"🔄 Calcul des IV Surfaces BS (depuis prix MC, T={heatmap_T:.2f} ans)...")
         
         call_iv_mc = np.zeros_like(call_prices_mc)
         put_iv_mc = np.zeros_like(put_prices_mc)
@@ -568,36 +583,36 @@ if run_button:
         log_text.write("Inversion BS pour Calls et Puts MC...")
         iv_mc_progress = st.progress(0)
         
-        for i, T_val in enumerate(T_grid):
-            for j, K_val in enumerate(K_grid):
+        for i, S_val in enumerate(S_grid):
+            for j, K_val in enumerate(K_grid_heatmap):
                 call_iv_mc[i, j] = implied_vol_option(
-                    call_prices_mc[i, j], S0_ref, K_val, T_val, rf_rate, "call"
+                    call_prices_mc[i, j], S_val, K_val, heatmap_T, rf_rate, "call"
                 )
                 put_iv_mc[i, j] = implied_vol_option(
-                    put_prices_mc[i, j], S0_ref, K_val, T_val, rf_rate, "put"
+                    put_prices_mc[i, j], S_val, K_val, heatmap_T, rf_rate, "put"
                 )
-            iv_mc_progress.progress((i + 1) / len(T_grid))
+            iv_mc_progress.progress((i + 1) / len(S_grid))
         
         iv_mc_progress.empty()
         st.success("✓ Inversion MC terminée")
         
-        # Affichage 3D MC (méthode notebook)
-        st.subheader("🌊 IV Surfaces 3D (Monte Carlo)")
+        # Affichage 3D MC (S-K heatmap)
+        st.subheader(f"🌊 IV Surfaces 3D (Monte Carlo, T={heatmap_T:.2f} ans)")
         
-        KK_mc, TT_mc = np.meshgrid(K_grid, T_grid)
+        KK_mc, SS_mc = np.meshgrid(K_grid_heatmap, S_grid)
         
         fig_iv_calls_mc = go.Figure(data=[go.Surface(
             x=KK_mc,
-            y=TT_mc,
+            y=SS_mc,
             z=call_iv_mc,
             colorscale='Plasma',
             colorbar=dict(title="IV")
         )])
         fig_iv_calls_mc.update_layout(
-            title=f"IV Surface Calls BS (depuis Heston MC) - {ticker}",
+            title=f"IV Surface Calls BS (depuis Heston MC) - {ticker} (T={heatmap_T:.2f})",
             scene=dict(
                 xaxis=dict(title="Strike K"),
-                yaxis=dict(title="Maturité T (années)"),
+                yaxis=dict(title="Spot S"),
                 zaxis=dict(title="Implied Volatility")
             ),
             height=600
@@ -605,16 +620,16 @@ if run_button:
         
         fig_iv_puts_mc = go.Figure(data=[go.Surface(
             x=KK_mc,
-            y=TT_mc,
+            y=SS_mc,
             z=put_iv_mc,
             colorscale='Plasma',
             colorbar=dict(title="IV")
         )])
         fig_iv_puts_mc.update_layout(
-            title=f"IV Surface Puts BS (depuis Heston MC) - {ticker}",
+            title=f"IV Surface Puts BS (depuis Heston MC) - {ticker} (T={heatmap_T:.2f})",
             scene=dict(
                 xaxis=dict(title="Strike K"),
-                yaxis=dict(title="Maturité T (années)"),
+                yaxis=dict(title="Spot S"),
                 zaxis=dict(title="Implied Volatility")
             ),
             height=600
@@ -622,31 +637,29 @@ if run_button:
         
         col_iv1, col_iv2 = st.columns(2)
         with col_iv1:
-            st.plotly_chart(fig_iv_calls_mc, width="stretch")
+            st.plotly_chart(fig_iv_calls_mc, use_container_width=True)
         with col_iv2:
-            st.plotly_chart(fig_iv_puts_mc, width="stretch")
+            st.plotly_chart(fig_iv_puts_mc, use_container_width=True)
         
         # Comparaison Analytique vs MC
         st.subheader("🔬 Comparaison: Monte Carlo vs Carr-Madan Analytique")
         
-        # Choisir une maturité pour comparer
-        T_compare = T_grid[len(T_grid)//2]
-        idx_T = len(T_grid)//2
+        # Choisir un strike proche de ATM pour comparer
+        K_compare = K_grid_heatmap[len(K_grid_heatmap)//2]
+        idx_K = len(K_grid_heatmap)//2
         
         # Graphiques de comparaison (prix déjà calculés)
         fig_compare = go.Figure()
-        fig_compare.add_trace(go.Scatter(x=K_grid, y=call_prices_mc[idx_T, :], mode='lines+markers', name='MC Call', line=dict(color='blue')))
-        fig_compare.add_trace(go.Scatter(x=K_grid, y=call_prices_cm[idx_T, :], mode='lines', name='Carr-Madan Call', line=dict(color='red', dash='dash')))
-        fig_compare.add_trace(go.Scatter(x=K_grid, y=put_prices_mc[idx_T, :], mode='lines+markers', name='MC Put', line=dict(color='green')))
-        fig_compare.add_trace(go.Scatter(x=K_grid, y=put_prices_cm[idx_T, :], mode='lines', name='Carr-Madan Put', line=dict(color='orange', dash='dash')))
+        fig_compare.add_trace(go.Scatter(x=S_grid, y=call_prices_mc[:, idx_K], mode='lines+markers', name='MC Call', line=dict(color='blue')))
+        fig_compare.add_trace(go.Scatter(x=S_grid, y=put_prices_mc[:, idx_K], mode='lines+markers', name='MC Put', line=dict(color='green')))
         fig_compare.update_layout(
-            title=f"Comparaison MC vs Analytique (T={T_compare:.2f} ans)",
-            xaxis_title="Strike K",
+            title=f"Prix MC en fonction de S (K={K_compare:.2f}, T={heatmap_T:.2f} ans)",
+            xaxis_title="Spot S",
             yaxis_title="Prix",
             height=500,
             showlegend=True
         )
-        st.plotly_chart(fig_compare, width="stretch")
+        st.plotly_chart(fig_compare, use_container_width=True)
         
         st.balloons()
         st.success("🎉 Analyse complète terminée avec succès!")
