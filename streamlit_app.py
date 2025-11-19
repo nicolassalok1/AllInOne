@@ -317,23 +317,16 @@ span_mc = st.sidebar.number_input("Span S & K autour du spot price", value=20.0,
 # Paramètres principaux sur l'écran
 st.header("⚙️ Paramètres de modélisation")
 
-col_nn, col_mc, col_grid = st.columns(3)
+col_nn, col_mc = st.columns(2)
 
 with col_nn:
     st.subheader("🎯 Calibration NN")
     max_iters = st.number_input("Itérations NN", value=10, min_value=10, max_value=1000, step=10, key="max_iters")
-    st.caption("ℹ️ Learning rate fixé à 0.05")
-    st.caption("ℹ️ Max points = 1000")
 
 with col_mc:
     st.subheader("📊 Monte Carlo")
     n_paths = st.number_input("Nombre de trajectoires", value=10000, min_value=1000, max_value=200000, step=1000, key="n_paths")
 
-with col_grid:
-    st.subheader("🔢 Grille de calcul (IV surfaces analytiques)")
-    span = st.number_input("Span autour de S0 (±)", value=20.0, min_value=5.0, max_value=200.0, step=5.0, key="span")
-    step_strike = st.number_input("Step strike", value=1.0, min_value=1.0, max_value=20.0, step=1.0, key="step_strike")
-    n_maturities = 40  # Nombre de points pour la grille de maturités
 
 run_button = st.button("🚀 Lancer l'analyse complète", type="primary", width="stretch")
 
@@ -391,7 +384,7 @@ if run_button:
         st.info("📐 Calcul des IV Surfaces analytiques (Carr-Madan FFT)...")
         
         # Grilles pour Carr-Madan
-        K_grid = np.arange(S0_ref - span, S0_ref + span + step_strike, step_strike)
+        K_grid = np.arange(S0_ref - span_mc, S0_ref + span_mc + step_strike, step_strike)
         T_grid = np.linspace(0.1, years_ahead, n_maturities)
         
         params_cm = HestonParams(
