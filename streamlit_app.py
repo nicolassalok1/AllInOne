@@ -14,6 +14,7 @@ import streamlit as st
 import torch
 import yfinance as yf
 from datetime import datetime
+from scipy.interpolate import griddata
 
 st.set_page_config(page_title="🚀 Heston Full Pipeline | Advanced Options Analytics", layout="wide")
 st.title("🚀 Pipeline Heston Complet: \nMarket Data → Heston params NN Calibration → IV Surfaces from Carr-Madan → Monte Carlo pricing")
@@ -464,6 +465,77 @@ if run_button:
         )
         
         st.plotly_chart(fig_iv_calls_cm, use_container_width=True)
+        
+        # Affichage de la surface IV du marché (yfinance)
+        st.subheader("🌊 IV Surfaces 3D (Marché - yfinance)")
+        
+        # Préparer les données du marché
+        market_data = calls_df[['K', 'T', 'iv_market']].dropna()
+        
+        if len(market_data) > 0:
+            # Créer une grille pour interpolation
+            K_market = market_data['K'].values
+            T_market = market_data['T'].values
+            IV_market = market_data['iv_market'].values
+            
+            # Utiliser la même grille que Carr-Madan pour comparaison
+            KK_market, TT_market = np.meshgrid(K_grid, T_grid)
+            
+            # Interpoler les données du marché sur la grille
+            IV_market_grid = griddata(
+                (K_market, T_market), 
+                IV_market, 
+                (KK_market, TT_market),
+                method='linear',
+                fill_value=np.nan
+            )
+            
+            fig_iv_market = go.Figure(data=[go.Surface(
+                x=KK_market,
+                y=TT_market,
+                z=IV_market_grid,
+                colorscale='Cividis',
+                colorbar=dict(title="IV Market")
+            )])
+            fig_iv_market.update_layout(
+                title=f"IV Surface Calls (Marché yfinance) - {ticker}",
+                scene=dict(
+                    xaxis=dict(title="Strike K"),
+                    yaxis=dict(title="Maturité T (années)"),
+                    zaxis=dict(title="Implied Volatility")
+                ),
+                height=600
+            )
+            
+            st.plotly_chart(fig_iv_market, use_container_width=True)
+            
+            # Afficher aussi les données brutes du marché en scatter 3D
+            with st.expander("📊 Voir les points de données bruts du marché"):
+                fig_market_scatter = go.Figure(data=[go.Scatter3d(
+                    x=K_market,
+                    y=T_market,
+                    z=IV_market,
+                    mode='markers',
+                    marker=dict(
+                        size=4,
+                        color=IV_market,
+                        colorscale='Cividis',
+                        showscale=True,
+                        colorbar=dict(title="IV Market")
+                    )
+                )])
+                fig_market_scatter.update_layout(
+                    title=f"Points de données IV Marché - {ticker}",
+                    scene=dict(
+                        xaxis=dict(title="Strike K"),
+                        yaxis=dict(title="Maturité T (années)"),
+                        zaxis=dict(title="Implied Volatility")
+                    ),
+                    height=600
+                )
+                st.plotly_chart(fig_market_scatter, use_container_width=True)
+        else:
+            st.warning("⚠️ Aucune donnée IV marché disponible")
         
         # Étape 4: Monte Carlo Heston - Grilles de prix (S, K) pour T fixe
         st.info(f"🎲 Pricing Heston par Monte Carlo (T={T_mc:.2f} ans)...")
