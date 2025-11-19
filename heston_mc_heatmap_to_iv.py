@@ -34,6 +34,10 @@ T = 1.0     # Maturité (1 an)
 span = 10.0  # S0 ± 10
 points = 21  # 21x21 grille
 
+# Paramètres de la grille pour K et T
+n_maturities = 10  # Nombre de maturités
+T_max = 2.0  # Maturité maximale en années
+
 # Paramètres Monte Carlo
 n_paths = 100000  # Nombre de trajectoires
 n_steps = 100     # Nombre de pas de temps
@@ -282,6 +286,96 @@ def plot_iv_surface_3d(S_grid: np.ndarray, K_grid: np.ndarray, iv_surface: np.nd
     return fig
 
 
+def compute_heston_heatmap_kt(
+    S0: float,
+    calib: dict,
+    r: float,
+    q: float,
+    K_grid: np.ndarray,
+    T_grid: np.ndarray,
+    n_paths: int,
+    n_steps_base: int = 100,
+    option_type: str = "call",
+    log_inner_mc: bool = False,
+) -> np.ndarray:
+    """Compute heatmap of Heston prices via Monte Carlo for grids K and T (fixed S)."""
+    params = params_from_calib(calib)
+    prices = np.zeros((len(T_grid), len(K_grid)))
+    
+    print(f"Computing {len(T_grid)}x{len(K_grid)} = {len(T_grid)*len(K_grid)} prices...")
+    total = len(T_grid) * len(K_grid)
+    count = 0
+    
+    for i, T in enumerate(T_grid):
+        # Adjust number of steps based on maturity
+        n_steps = max(int(T * 252), 10)  # At least 10 steps
+        for j, K in enumerate(K_grid):
+            prices[i, j] = heston_monte_carlo_price(
+                S0, K, T, r, q, params, n_paths, n_steps, option_type,
+                log_steps=log_inner_mc and (i == 0 and j == 0),
+                log_prefix=f"T={T:.2f},K={K:.2f}"
+            )
+            count += 1
+            if count % 50 == 0:
+                print(f"Progress: {count}/{total} ({100*count/total:.1f}%)")
+    
+    return prices
+
+
+def compute_iv_surface_from_prices_kt(
+    S0: float,
+    K_grid: np.ndarray,
+    T_grid: np.ndarray,
+    prices: np.ndarray,
+    r: float,
+    option_type: str = "call",
+) -> np.ndarray:
+    """Convert Heston prices (K,T grid) to Black-Scholes implied volatilities."""
+    iv_surface = np.zeros_like(prices)
+    
+    print(f"\nComputing implied volatilities...")
+    total = len(T_grid) * len(K_grid)
+    count = 0
+    
+    for i, T in enumerate(T_grid):
+        for j, K in enumerate(K_grid):
+            price = prices[i, j]
+            iv = implied_vol_from_price(price, S0, K, T, r, option_type)
+            iv_surface[i, j] = iv
+            count += 1
+            if count % 50 == 0:
+                print(f"IV Progress: {count}/{total} ({100*count/total:.1f}%)")
+    
+    return iv_surface
+
+
+def plot_iv_surface_3d_kt(K_grid: np.ndarray, T_grid: np.ndarray, iv_surface: np.ndarray, title: str):
+    """Create 3D surface plot of implied volatility with K and T axes."""
+    # Create meshgrid
+    K_mesh, T_mesh = np.meshgrid(K_grid, T_grid)
+    
+    fig = go.Figure(
+        data=go.Surface(
+            x=K_mesh,
+            y=T_mesh,
+            z=iv_surface,
+            colorscale="Viridis",
+            colorbar=dict(title="Implied Vol"),
+        )
+    )
+    fig.update_layout(
+        title=title,
+        scene=dict(
+            xaxis_title="Strike K",
+            yaxis_title="Maturity T (years)",
+            zaxis_title="Implied Volatility",
+        ),
+        width=800,
+        height=700,
+    )
+    return fig
+
+
 if __name__ == "__main__":
     print("=" * 80)
     print("HESTON MONTE CARLO → HEATMAP → IMPLIED VOLATILITY SURFACE")
@@ -402,6 +496,134 @@ if __name__ == "__main__":
     df = pd.DataFrame(df_results)
     df.to_csv('heston_mc_iv_surface.csv', index=False)
     print(f"✓ Data saved to: heston_mc_iv_surface.csv")
+    
+    # NEW: Step 4 - Compute IV Surface with K and T grids (fixed S)
+    print("\n" + "=" * 80)
+    print("STEP 4: Computing Heston prices via Monte Carlo with K and T grids")
+    print("=" * 80)
+    
+    # Create K and T grids
+    S0_rounded = math.ceil(S0 / 10) * 10
+    K_grid_kt = np.arange(S0_rounded - 20, S0_rounded + 21, 5)
+    T_grid_kt = np.linspace(0.1, T_max, n_maturities)
+    
+    print(f"  S0 (fixed): {S0:.2f}")
+    print(f"  K grid: {len(K_grid_kt)} strikes from {K_grid_kt[0]:.1f} to {K_grid_kt[-1]:.1f}")
+    print(f"  T grid: {len(T_grid_kt)} maturities from {T_grid_kt[0]:.2f} to {T_grid_kt[-1]:.2f} years")
+    print(f"  Total: {len(T_grid_kt) * len(K_grid_kt)} prices")
+    
+    # Compute call prices with K and T grids
+    print("\nComputing CALL prices (K,T grid)...")
+    call_prices_kt = compute_heston_heatmap_kt(
+        S0, calib, r, q, K_grid_kt, T_grid_kt, n_paths, n_steps, "call", log_inner_mc=False
+    )
+    
+    # Compute put prices with K and T grids
+    print("\nComputing PUT prices (K,T grid)...")
+    put_prices_kt = compute_heston_heatmap_kt(
+        S0, calib, r, q, K_grid_kt, T_grid_kt, n_paths, n_steps, "put", log_inner_mc=False
+    )
+    
+    # Step 5: Convert to Implied Volatilities (K,T grid)
+    print("\n" + "=" * 80)
+    print("STEP 5: Computing Black-Scholes Implied Volatilities from Heston prices (K,T)")
+    print("=" * 80)
+    call_iv_surface_kt = compute_iv_surface_from_prices_kt(S0, K_grid_kt, T_grid_kt, call_prices_kt, r, "call")
+    put_iv_surface_kt = compute_iv_surface_from_prices_kt(S0, K_grid_kt, T_grid_kt, put_prices_kt, r, "put")
+    
+    # Statistics
+    print("\n" + "=" * 80)
+    print("RESULTS SUMMARY (K,T Grid)")
+    print("=" * 80)
+    print(f"\nCall Prices (K,T):")
+    print(f"  Min: {np.nanmin(call_prices_kt):.4f}")
+    print(f"  Max: {np.nanmax(call_prices_kt):.4f}")
+    print(f"  Mean: {np.nanmean(call_prices_kt):.4f}")
+    
+    print(f"\nPut Prices (K,T):")
+    print(f"  Min: {np.nanmin(put_prices_kt):.4f}")
+    print(f"  Max: {np.nanmax(put_prices_kt):.4f}")
+    print(f"  Mean: {np.nanmean(put_prices_kt):.4f}")
+    
+    print(f"\nCall Implied Volatilities (K,T):")
+    print(f"  Min: {np.nanmin(call_iv_surface_kt):.4f}")
+    print(f"  Max: {np.nanmax(call_iv_surface_kt):.4f}")
+    print(f"  Mean: {np.nanmean(call_iv_surface_kt):.4f}")
+    
+    print(f"\nPut Implied Volatilities (K,T):")
+    print(f"  Min: {np.nanmin(put_iv_surface_kt):.4f}")
+    print(f"  Max: {np.nanmax(put_iv_surface_kt):.4f}")
+    print(f"  Mean: {np.nanmean(put_iv_surface_kt):.4f}")
+    
+    # Create visualizations for K,T surfaces
+    print("\n" + "=" * 80)
+    print("CREATING VISUALIZATIONS (K,T Grid)")
+    print("=" * 80)
+    
+    # Heatmaps of prices (K,T)
+    fig_call_price_kt = plot_heatmap(call_prices_kt, K_grid_kt, T_grid_kt, 
+                                      "Heston Call Prices - Monte Carlo (K,T)", "Price")
+    fig_call_price_kt.update_layout(yaxis_title="Maturity T (years)")
+    
+    fig_put_price_kt = plot_heatmap(put_prices_kt, K_grid_kt, T_grid_kt, 
+                                     "Heston Put Prices - Monte Carlo (K,T)", "Price")
+    fig_put_price_kt.update_layout(yaxis_title="Maturity T (years)")
+    
+    # Heatmaps of IVs (K,T)
+    fig_call_iv_kt = plot_heatmap(call_iv_surface_kt, K_grid_kt, T_grid_kt, 
+                                   "Black-Scholes IV from Heston Call Prices (K,T)", "IV")
+    fig_call_iv_kt.update_layout(yaxis_title="Maturity T (years)")
+    
+    fig_put_iv_kt = plot_heatmap(put_iv_surface_kt, K_grid_kt, T_grid_kt, 
+                                  "Black-Scholes IV from Heston Put Prices (K,T)", "IV")
+    fig_put_iv_kt.update_layout(yaxis_title="Maturity T (years)")
+    
+    # 3D surface plots (K,T)
+    fig_call_iv_3d_kt = plot_iv_surface_3d_kt(K_grid_kt, T_grid_kt, call_iv_surface_kt, 
+                                               "Call IV Surface (3D) - MC (K,T)")
+    fig_put_iv_3d_kt = plot_iv_surface_3d_kt(K_grid_kt, T_grid_kt, put_iv_surface_kt, 
+                                              "Put IV Surface (3D) - MC (K,T)")
+    
+    # Show K,T figures
+    print("\nShowing Call Price Heatmap (K,T)...")
+    fig_call_price_kt.show()
+    
+    print("Showing Put Price Heatmap (K,T)...")
+    fig_put_price_kt.show()
+    
+    print("Showing Call IV Heatmap (K,T)...")
+    fig_call_iv_kt.show()
+    
+    print("Showing Put IV Heatmap (K,T)...")
+    fig_put_iv_kt.show()
+    
+    print("Showing Call IV 3D Surface (K,T)...")
+    fig_call_iv_3d_kt.show()
+    
+    print("Showing Put IV 3D Surface (K,T)...")
+    fig_put_iv_3d_kt.show()
+    
+    # Save K,T data to CSV
+    print("\n" + "=" * 80)
+    print("SAVING DATA (K,T Grid)")
+    print("=" * 80)
+    
+    df_results_kt = []
+    for i, T_val in enumerate(T_grid_kt):
+        for j, K_val in enumerate(K_grid_kt):
+            df_results_kt.append({
+                'S0': S0,
+                'K': K_val,
+                'T': T_val,
+                'call_price': call_prices_kt[i, j],
+                'put_price': put_prices_kt[i, j],
+                'call_iv': call_iv_surface_kt[i, j],
+                'put_iv': put_iv_surface_kt[i, j],
+            })
+    
+    df_kt = pd.DataFrame(df_results_kt)
+    df_kt.to_csv('heston_mc_iv_surface_kt.csv', index=False)
+    print(f"✓ Data saved to: heston_mc_iv_surface_kt.csv")
     
     print("\n" + "=" * 80)
     print("DONE!")
