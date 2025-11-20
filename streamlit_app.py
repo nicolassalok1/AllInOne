@@ -318,7 +318,7 @@ if calls_df is not None and puts_df is not None and S0_ref is not None:
         st.subheader("⚙️ Modes de calibration NN")
         mode = st.radio(
             "Choisir un mode",
-            ["Rapide", "Bonne", "Précision"],
+            ["Rapide", "Bonne", "Excellente"],
             index=1,
             horizontal=True,
         )
@@ -481,24 +481,92 @@ if run_button:
             market_put_grid = build_market_price_grid(puts_df, "P_mkt", KK_cm, TT_cm)
 
             st.subheader("🔥 Heatmaps de prix (Carr-Madan vs Marché)")
-            fig_heat_call_cm = go.Figure(data=[go.Heatmap(z=call_prices_cm, x=K_grid, y=T_grid, colorscale='Viridis', colorbar=dict(title='Call CM'))])
-            fig_heat_put_cm = go.Figure(data=[go.Heatmap(z=put_prices_cm, x=K_grid, y=T_grid, colorscale='Viridis', colorbar=dict(title='Put CM'))])
+            fig_heat_call_cm = go.Figure(
+                data=[
+                    go.Heatmap(
+                        z=call_prices_cm,
+                        x=K_grid,
+                        y=T_grid,
+                        colorscale="Viridis",
+                        colorbar=dict(title="Call CM"),
+                    )
+                ]
+            )
+            fig_heat_put_cm = go.Figure(
+                data=[
+                    go.Heatmap(
+                        z=put_prices_cm,
+                        x=K_grid,
+                        y=T_grid,
+                        colorscale="Viridis",
+                        colorbar=dict(title="Put CM"),
+                    )
+                ]
+            )
 
             with tab_calls:
                 st.plotly_chart(fig_heat_call_cm, use_container_width=True)
                 if market_call_grid is not None:
-                    fig_heat_call_mkt = go.Figure(data=[go.Heatmap(z=market_call_grid, x=K_grid, y=T_grid, colorscale='Plasma', colorbar=dict(title='Call Marché'), zmin=call_prices_cm.min(), zmax=call_prices_cm.max())])
+                    fig_heat_call_mkt = go.Figure(
+                        data=[
+                            go.Heatmap(
+                                z=market_call_grid,
+                                x=K_grid,
+                                y=T_grid,
+                                colorscale="Plasma",
+                                colorbar=dict(title="Call Marché"),
+                                zmin=call_prices_cm.min(),
+                                zmax=call_prices_cm.max(),
+                            )
+                        ]
+                    )
                     st.plotly_chart(fig_heat_call_mkt, use_container_width=True)
                 else:
                     st.info("Pas assez de points marché pour la heatmap call.")
 
+                # Description textuelle de ce que l'utilisateur voit sur les heatmaps de calls
+                st.markdown(
+                    f"""
+**Lecture des heatmaps (Calls)**  
+- Titre : comparaison des prix de calls Carr-Madan et marché  
+- Axe des abscisses (**K**) : strikes autour de S₀ ≈ `{S0_ref:.2f}`  
+- Axe des ordonnées (**T**) : maturité en années  
+- Couleur : niveau de **prix du call** pour chaque couple (K, T)  
+- Paramètres utilisés : `S0 = {S0_ref:.2f}`, `r = {rf_rate:.3f}`, `q = {div_yield:.3f}`
+"""
+                )
+
             with tab_puts:
                 st.plotly_chart(fig_heat_put_cm, use_container_width=True)
                 if market_put_grid is not None:
-                    fig_heat_put_mkt = go.Figure(data=[go.Heatmap(z=market_put_grid, x=K_grid, y=T_grid, colorscale='Plasma', colorbar=dict(title='Put Marché'), zmin=put_prices_cm.min(), zmax=put_prices_cm.max())])
+                    fig_heat_put_mkt = go.Figure(
+                        data=[
+                            go.Heatmap(
+                                z=market_put_grid,
+                                x=K_grid,
+                                y=T_grid,
+                                colorscale="Plasma",
+                                colorbar=dict(title="Put Marché"),
+                                zmin=put_prices_cm.min(),
+                                zmax=put_prices_cm.max(),
+                            )
+                        ]
+                    )
                     st.plotly_chart(fig_heat_put_mkt, use_container_width=True)
                 else:
                     st.info("Pas assez de points marché pour la heatmap put.")
+
+                # Description textuelle de ce que l'utilisateur voit sur les heatmaps de puts
+                st.markdown(
+                    f"""
+**Lecture des heatmaps (Puts)**  
+- Titre : comparaison des prix de puts Carr-Madan et marché  
+- Axe des abscisses (**K**) : strikes autour de S₀ ≈ `{S0_ref:.2f}`  
+- Axe des ordonnées (**T**) : maturité en années  
+- Couleur : niveau de **prix du put** pour chaque couple (K, T)  
+- Paramètres utilisés : `S0 = {S0_ref:.2f}`, `r = {rf_rate:.3f}`, `q = {div_yield:.3f}`
+"""
+                )
 
             st.balloons()
             st.success("🎉 Analyse terminée")
