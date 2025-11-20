@@ -150,7 +150,8 @@ def calibrate_heston_nn(df, r, q, max_iters, lr, spot_override, progress_callbac
         loss_val.backward()
         optimizer.step()
         if progress_callback:
-            progress_callback(iteration + 1, max_iters)
+            # On passe aussi la valeur du loss courant au callback
+            progress_callback(iteration + 1, max_iters, float(loss_val.detach().cpu()))
 
     return HestonParams.from_unconstrained(u[0], u[1], u[2], u[3], u[4])
 
@@ -322,11 +323,11 @@ if calls_df is not None and puts_df is not None and S0_ref is not None:
             horizontal=True,
         )
         if mode == "Rapide":
-            max_iters = 200
+            max_iters = 250
             learning_rate = 0.01
         elif mode == "Bonne":
             max_iters = 1000
-            learning_rate = 0.05
+            learning_rate = 0.005
         else:  # Précision
             max_iters = 2000
             learning_rate = 0.001
@@ -369,10 +370,12 @@ if run_button:
             st.info("🧠 Calibration ciblée...")
             progress_bar = st.progress(0.0)
             status_text = st.empty()
+            loss_log: list[float] = []
 
-            def progress_cb(current: int, total: int) -> None:
+            def progress_cb(current: int, total: int, loss_val: float) -> None:
                 progress_bar.progress(current / total)
-                status_text.text(f"⏳ Iter {current}/{total}")
+                status_text.text(f"⏳ Iter {current}/{total} | Loss = {loss_val:.6f}")
+                loss_log.append(loss_val)
 
             calib_slice = calls_df[
                 (calls_df["T"].round(2).between(*CALIB_T_BAND)) &
@@ -404,6 +407,11 @@ if run_button:
             }
             st.success("✓ Calibration terminée")
             st.dataframe(pd.Series(params_dict, name="Paramètre").to_frame())
+
+            # Log du loss pendant la calibration (courbe)
+            if loss_log:
+                st.subheader("📉 Évolution du loss pendant la calibration")
+                st.line_chart(pd.DataFrame({"loss": loss_log}))
 
             # ---------------------------------------------------------------
             st.info("📐 Surfaces analytiques Carr-Madan")
