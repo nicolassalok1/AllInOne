@@ -302,10 +302,18 @@ if calls_df is not None and puts_df is not None and S0_ref is not None:
 
         unique_T = sorted(calls_df["T"].round(2).unique())
         if unique_T:
+            # Valeur par défaut : min(T) + largeur de bande + 0.1,
+            # puis on prend la maturité disponible la plus proche
+            if calib_T_target is None:
+                target_guess = max(MIN_IV_MATURITY, unique_T[0] + calib_T_band + 0.1)
+                idx_default = int(np.argmin(np.abs(np.array(unique_T) - target_guess)))
+            else:
+                idx_default = unique_T.index(calib_T_target) if calib_T_target in unique_T else 0
+
             calib_T_target = st.selectbox(
                 "Maturité T cible pour la calibration (Time to Maturity)",
                 unique_T,
-                index=unique_T.index(calib_T_target) if calib_T_target in unique_T and calib_T_target is not None else 0,
+                index=idx_default,
                 format_func=lambda x: f"{x:.2f}",
             )
             st.session_state.calib_T_target = calib_T_target
@@ -407,11 +415,6 @@ if run_button:
             }
             st.success("✓ Calibration terminée")
             st.dataframe(pd.Series(params_dict, name="Paramètre").to_frame())
-
-            # Log du loss pendant la calibration (courbe)
-            if loss_log:
-                st.subheader("📉 Évolution du loss pendant la calibration")
-                st.line_chart(pd.DataFrame({"loss": loss_log}))
 
             # ---------------------------------------------------------------
             st.info("📐 Surfaces analytiques Carr-Madan")
