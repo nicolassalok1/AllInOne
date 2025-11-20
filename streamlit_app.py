@@ -284,26 +284,11 @@ calib_T_target = st.session_state.calib_T_target
 
 # Partie calibration NN (cachée tant que les données n'ont pas été récupérées)
 if calls_df is not None and puts_df is not None and S0_ref is not None:
-    col_nn, _ = st.columns(2)
+    col_nn, col_modes = st.columns(2)
+
+    # Colonne gauche : bande T et maturité cible
     with col_nn:
         st.subheader("🎯 Calibration NN Carr-Madan")
-        max_iters = st.number_input(
-            "Itérations NN",
-            value=500,
-            min_value=100,
-            max_value=5000,
-            step=100,
-            key="max_iters",
-        )
-        learning_rate = st.number_input(
-            "Learning rate",
-            value=0.01,
-            min_value=0.0005,
-            max_value=0.05,
-            step=0.0005,
-            format="%.3f",
-            key="learning_rate",
-        )
         calib_T_band = st.number_input(
             "Largeur bande T (±)",
             value=0.04,
@@ -314,7 +299,6 @@ if calls_df is not None and puts_df is not None and S0_ref is not None:
             key="calib_T_band",
         )
 
-        # Choix de la maturité cible directement dans le panel principal
         unique_T = sorted(calls_df["T"].round(2).unique())
         if unique_T:
             calib_T_target = st.selectbox(
@@ -327,6 +311,31 @@ if calls_df is not None and puts_df is not None and S0_ref is not None:
         else:
             st.warning("Pas de maturités disponibles dans les données CBOE.")
             calib_T_target = None
+
+    # Colonne droite : choix du mode de calibration via boutons
+    with col_modes:
+        st.subheader("⚙️ Modes de calibration NN")
+        mode = st.radio(
+            "Choisir un mode",
+            ["Rapide", "Bonne", "Précision"],
+            index=1,
+            horizontal=True,
+        )
+        if mode == "Rapide":
+            max_iters = 500
+            learning_rate = 0.01
+        elif mode == "Bonne":
+            max_iters = 1000
+            learning_rate = 0.05
+        else:  # Précision
+            max_iters = 2000
+            learning_rate = 0.001
+
+        # Affiche les hyperparamètres associés au mode sélectionné
+        st.markdown(
+            f"**Itérations NN** : `{max_iters}`  \n"
+            f"**Learning rate** : `{learning_rate}`"
+        )
 
     if calib_T_target is not None:
         CALIB_T_BAND = (
