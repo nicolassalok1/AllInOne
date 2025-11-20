@@ -32,7 +32,7 @@ st.write(
     "\n **Comparez prix analytiques vs Monte Carlo et découvrez le smile de volatilité !**"
 )
 # Import du module Heston torch
-from heston_torch import HestonParams, carr_madan_call_torch
+from heston_torch import HestonParams, carr_madan_call_torch, carr_madan_put_torch
 
 torch.set_default_dtype(torch.float64)
 DEVICE = torch.device("cpu")
@@ -138,20 +138,23 @@ def download_options(symbol: str, option_type: str, years_ahead: float = 2.5) ->
 
 
 def prices_from_unconstrained(
-    u: torch.Tensor, S0_t: torch.Tensor, K_t: torch.Tensor, T_t: torch.Tensor, r: float, q: float
+    u: torch.Tensor, S0_t: torch.Tensor, K_t: torch.Tensor, T_t: torch.Tensor, r: float, q: float, option_type: str = "call"
 ) -> torch.Tensor:
     params = HestonParams.from_unconstrained(u[0], u[1], u[2], u[3], u[4])
     prices = []
     for S0_i, K_i, T_i in zip(S0_t, K_t, T_t):
-        price_i = carr_madan_call_torch(S0_i, r, q, T_i, params, K_i)
+        if option_type == "call":
+            price_i = carr_madan_call_torch(S0_i, r, q, T_i, params, K_i)
+        else:  # put
+            price_i = carr_madan_put_torch(S0_i, r, q, T_i, params, K_i)
         prices.append(price_i)
     return torch.stack(prices)
 
 
 def loss(
-    u: torch.Tensor, S0_t: torch.Tensor, K_t: torch.Tensor, T_t: torch.Tensor, C_mkt_t: torch.Tensor, r: float, q: float
+    u: torch.Tensor, S0_t: torch.Tensor, K_t: torch.Tensor, T_t: torch.Tensor, C_mkt_t: torch.Tensor, r: float, q: float, option_type: str = "call"
 ) -> torch.Tensor:
-    model_prices = prices_from_unconstrained(u, S0_t, K_t, T_t, r, q)
+    model_prices = prices_from_unconstrained(u, S0_t, K_t, T_t, r, q, option_type)
     diff = model_prices - C_mkt_t
     return 0.5 * (diff**2).mean()
 
@@ -165,17 +168,64 @@ def calibrate_heston_nn(
     lr: float = 5e-3,
     progress_callback: Callable[[int, int], None] | None = None,
     log_callback: Callable[[str], None] | None = None,
+    option_type: str | None = None,
 ) -> dict:
-    """Calibration via réseau de neurones PyTorch."""
+    """Calibration via réseau de neurones PyTorch.
+    
+    Args:
+        df: DataFrame with option data. Must contain S0, K, T and either C_mkt (calls) or P_mkt (puts)
+        r: Risk-free rate
+        q: Dividend yield
+        max_points: Maximum number of points to use for calibration
+        max_iters: Maximum number of iterations
+        lr: Learning rate
+        progress_callback: Optional callback for progress updates
+        log_callback: Optional callback for log messages
+        option_type: Option type ('call' or 'put'). If None, automatically detected from available columns.
+    
+    Returns:
+        Dictionary with calibrated Heston parameters
+    """
     if df.empty:
         raise ValueError("DataFrame vide.")
     
-    df_clean = df.dropna(subset=["S0", "K", "T", "C_mkt"])
+    # Auto-detect option type if not specified
+    if option_type is None:
+        has_call = "C_mkt" in df.columns and df["C_mkt"].notna().any() and (df["C_mkt"] > 0).any()
+        has_put = "P_mkt" in df.columns and df["P_mkt"].notna().any() and (df["P_mkt"] > 0).any()
+        
+        if has_call and not has_put:
+            option_type = "call"
+        elif has_put and not has_call:
+            option_type = "put"
+        elif has_call and has_put:
+            # Prefer calls if both are available
+            option_type = "call"
+        else:
+            raise ValueError(
+                "Aucune donnée de prix valide trouvée. "
+                "Le DataFrame doit contenir soit 'C_mkt' (calls) soit 'P_mkt' (puts) avec des valeurs > 0."
+            )
+    
+    # Select the appropriate price column
+    price_col = "C_mkt" if option_type == "call" else "P_mkt"
+    
+    # Check if required columns exist
+    required_cols = ["S0", "K", "T", price_col]
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        raise ValueError(f"Colonnes manquantes dans le DataFrame: {missing_cols}")
+    
+    # Clean the data
+    df_clean = df.dropna(subset=required_cols)
     df_clean = df_clean[df_clean["T"] > 0]
-    df_clean = df_clean[df_clean["C_mkt"] > 0]
+    df_clean = df_clean[df_clean[price_col] > 0]
     
     if len(df_clean) == 0:
-        raise ValueError("Aucun point valide après nettoyage.")
+        raise ValueError(
+            f"Aucun point valide après nettoyage. "
+            f"Vérifiez que le DataFrame contient des valeurs positives pour {price_col}, T et des valeurs non-nulles pour S0, K."
+        )
     
     if len(df_clean) > max_points:
         df_clean = df_clean.sample(n=max_points, random_state=42)
@@ -183,7 +233,7 @@ def calibrate_heston_nn(
     S0_t = torch.tensor(df_clean["S0"].values, dtype=torch.float64, device=DEVICE)
     K_t = torch.tensor(df_clean["K"].values, dtype=torch.float64, device=DEVICE)
     T_t = torch.tensor(df_clean["T"].values, dtype=torch.float64, device=DEVICE)
-    C_mkt_t = torch.tensor(df_clean["C_mkt"].values, dtype=torch.float64, device=DEVICE)
+    price_t = torch.tensor(df_clean[price_col].values, dtype=torch.float64, device=DEVICE)
     
     # Initialisation
     u = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0], dtype=torch.float64, device=DEVICE, requires_grad=True)
@@ -191,7 +241,7 @@ def calibrate_heston_nn(
     
     for iteration in range(max_iters):
         optimizer.zero_grad()
-        loss_val = loss(u, S0_t, K_t, T_t, C_mkt_t, r, q)
+        loss_val = loss(u, S0_t, K_t, T_t, price_t, r, q, option_type)
         loss_val.backward()
         optimizer.step()
         
