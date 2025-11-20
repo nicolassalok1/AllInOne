@@ -323,7 +323,7 @@ if calls_df is not None and puts_df is not None and S0_ref is not None:
             horizontal=True,
         )
         if mode == "Rapide":
-            max_iters = 250
+            max_iters = 300
             learning_rate = 0.01
         elif mode == "Bonne":
             max_iters = 1000
@@ -441,46 +441,137 @@ if run_button:
                     put_iv_cm[i, j] = implied_vol_option(put_prices_cm[i, j], S0_ref, K_val, T_val, rf_rate, "put")
 
             KK_cm, TT_cm = np.meshgrid(K_grid, T_grid, indexing="xy")
-            fig_call_cm = go.Figure(data=[go.Surface(x=KK_cm, y=TT_cm, z=call_iv_cm, colorscale='Viridis')])
-            fig_call_cm.update_layout(title=f"IV Surface Calls (Carr-Madan) - {ticker}", scene=dict(xaxis_title='K', yaxis_title='T', zaxis_title='IV'), height=600)
-            fig_put_cm = go.Figure(data=[go.Surface(x=KK_cm, y=TT_cm, z=put_iv_cm, colorscale='Viridis')])
-            fig_put_cm.update_layout(title=f"IV Surface Puts (Carr-Madan) - {ticker}", scene=dict(xaxis_title='K', yaxis_title='T', zaxis_title='IV'), height=600)
 
-            # Surfaces marché (IV recalculée)
+            # Détermination des bornes Z pour les surfaces d'IV (0 → vol max + 0.1)
+            call_iv_max = float(np.nanmax(call_iv_cm)) if call_iv_cm.size > 0 else 0.0
+            put_iv_max = float(np.nanmax(put_iv_cm)) if put_iv_cm.size > 0 else 0.0
+
+            # Surfaces marché (IV recalculée) – calculées avant pour ajuster les bornes Z
             surf_call_market = build_market_surface(calls_df, "C_mkt", "call", KK_cm, TT_cm)
             surf_put_market = build_market_surface(puts_df, "P_mkt", "put", KK_cm, TT_cm)
+
+            if surf_call_market is not None:
+                call_iv_max = max(call_iv_max, float(np.nanmax(surf_call_market)))
+            if surf_put_market is not None:
+                put_iv_max = max(put_iv_max, float(np.nanmax(surf_put_market)))
+
+            call_iv_zmax = call_iv_max + 0.1
+            put_iv_zmax = put_iv_max + 0.1
+
+            fig_call_cm = go.Figure(
+                data=[
+                    go.Surface(
+                        x=KK_cm,
+                        y=TT_cm,
+                        z=call_iv_cm,
+                        colorscale="Viridis",
+                        cmin=0.0,
+                        cmax=call_iv_zmax,
+                    )
+                ]
+            )
+            fig_call_cm.update_layout(
+                title=f"IV Surface Calls (Carr-Madan) - {ticker}",
+                scene=dict(
+                    xaxis_title="K",
+                    yaxis_title="T",
+                    zaxis_title="IV",
+                    zaxis=dict(range=[0.0, call_iv_zmax]),
+                ),
+                height=600,
+            )
+
+            fig_put_cm = go.Figure(
+                data=[
+                    go.Surface(
+                        x=KK_cm,
+                        y=TT_cm,
+                        z=put_iv_cm,
+                        colorscale="Viridis",
+                        cmin=0.0,
+                        cmax=put_iv_zmax,
+                    )
+                ]
+            )
+            fig_put_cm.update_layout(
+                title=f"IV Surface Puts (Carr-Madan) - {ticker}",
+                scene=dict(
+                    xaxis_title="K",
+                    yaxis_title="T",
+                    zaxis_title="IV",
+                    zaxis=dict(range=[0.0, put_iv_zmax]),
+                ),
+                height=600,
+            )
+
+            # Surfaces marché (IV recalculée)
             fig_call_market = None
             fig_put_market = None
             if surf_call_market is not None:
-                fig_call_market = go.Figure(data=[go.Surface(x=KK_cm, y=TT_cm, z=surf_call_market, colorscale='Plasma')])
-                fig_call_market.update_layout(title=f"IV Surface Calls (Marché) - {ticker}", scene=dict(xaxis_title='K', yaxis_title='T', zaxis_title='IV'), height=600)
+                fig_call_market = go.Figure(
+                    data=[
+                        go.Surface(
+                            x=KK_cm,
+                            y=TT_cm,
+                            z=surf_call_market,
+                            colorscale="Plasma",
+                            cmin=0.0,
+                            cmax=call_iv_zmax,
+                        )
+                    ]
+                )
+                fig_call_market.update_layout(
+                    title=f"IV Surface Calls (Marché) - {ticker}",
+                    scene=dict(
+                        xaxis_title="K",
+                        yaxis_title="T",
+                        zaxis_title="IV",
+                        zaxis=dict(range=[0.0, call_iv_zmax]),
+                    ),
+                    height=600,
+                )
             if surf_put_market is not None:
-                fig_put_market = go.Figure(data=[go.Surface(x=KK_cm, y=TT_cm, z=surf_put_market, colorscale='Plasma')])
-                fig_put_market.update_layout(title=f"IV Surface Puts (Marché) - {ticker}", scene=dict(xaxis_title='K', yaxis_title='T', zaxis_title='IV'), height=600)
-
-            tab_calls, tab_puts = st.tabs(["📈 Calls", "📉 Puts"])
-
-            with tab_calls:
-                st.subheader("🌊 IV Surfaces Calls")
-                st.plotly_chart(fig_call_cm, use_container_width=True)
-                if fig_call_market:
-                    st.plotly_chart(fig_call_market, use_container_width=True)
-                else:
-                    st.info("Pas assez de points marché pour la surface call.")
-
-            with tab_puts:
-                st.subheader("🌊 IV Surfaces Puts")
-                st.plotly_chart(fig_put_cm, use_container_width=True)
-                if fig_put_market:
-                    st.plotly_chart(fig_put_market, use_container_width=True)
-                else:
-                    st.info("Pas assez de points marché pour la surface put.")
+                fig_put_market = go.Figure(
+                    data=[
+                        go.Surface(
+                            x=KK_cm,
+                            y=TT_cm,
+                            z=surf_put_market,
+                            colorscale="Plasma",
+                            cmin=0.0,
+                            cmax=put_iv_zmax,
+                        )
+                    ]
+                )
+                fig_put_market.update_layout(
+                    title=f"IV Surface Puts (Marché) - {ticker}",
+                    scene=dict(
+                        xaxis_title="K",
+                        yaxis_title="T",
+                        zaxis_title="IV",
+                        zaxis=dict(range=[0.0, put_iv_zmax]),
+                    ),
+                    height=600,
+                )
 
             # Heatmaps prix (Carr-Madan & Marché)
             market_call_grid = build_market_price_grid(calls_df, "C_mkt", KK_cm, TT_cm)
             market_put_grid = build_market_price_grid(puts_df, "P_mkt", KK_cm, TT_cm)
 
-            st.subheader("🔥 Heatmaps de prix (Carr-Madan vs Marché)")
+            tab_calls, tab_puts = st.tabs(["📈 Calls", "📉 Puts"])
+
+            # Échelle de couleurs commune avec padding ±10 autour du range des prix modèle
+            pad = 10.0
+            call_min = float(call_prices_cm.min())
+            call_max = float(call_prices_cm.max())
+            call_zmin = call_min - pad
+            call_zmax = call_max + pad
+
+            put_min = float(put_prices_cm.min())
+            put_max = float(put_prices_cm.max())
+            put_zmin = put_min - pad
+            put_zmax = put_max + pad
+
             fig_heat_call_cm = go.Figure(
                 data=[
                     go.Heatmap(
@@ -488,7 +579,9 @@ if run_button:
                         x=K_grid,
                         y=T_grid,
                         colorscale="Viridis",
-                        colorbar=dict(title="Call CM"),
+                        colorbar=dict(title="Prix des Call Heston"),
+                        zmin=call_zmin,
+                        zmax=call_zmax,
                     )
                 ]
             )
@@ -499,30 +592,47 @@ if run_button:
                         x=K_grid,
                         y=T_grid,
                         colorscale="Viridis",
-                        colorbar=dict(title="Put CM"),
+                        colorbar=dict(title="Prix des Put Heston"),
+                        zmin=put_zmin,
+                        zmax=put_zmax,
                     )
                 ]
             )
 
+            # Onglet Calls : IV et prix Carr-Madan côte à côte, puis marché
             with tab_calls:
-                st.plotly_chart(fig_heat_call_cm, use_container_width=True)
-                if market_call_grid is not None:
-                    fig_heat_call_mkt = go.Figure(
-                        data=[
-                            go.Heatmap(
-                                z=market_call_grid,
-                                x=K_grid,
-                                y=T_grid,
-                                colorscale="Plasma",
-                                colorbar=dict(title="Call Marché"),
-                                zmin=call_prices_cm.min(),
-                                zmax=call_prices_cm.max(),
-                            )
-                        ]
-                    )
-                    st.plotly_chart(fig_heat_call_mkt, use_container_width=True)
-                else:
-                    st.info("Pas assez de points marché pour la heatmap call.")
+                st.subheader("Carr-Madan : IV & prix (Calls)")
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.plotly_chart(fig_call_cm, use_container_width=True)
+                with c2:
+                    st.plotly_chart(fig_heat_call_cm, use_container_width=True)
+
+                st.subheader("Marché : IV & prix (Calls)")
+                c3, c4 = st.columns(2)
+                with c3:
+                    if fig_call_market:
+                        st.plotly_chart(fig_call_market, use_container_width=True)
+                    else:
+                        st.info("Pas assez de points marché pour la surface call.")
+                with c4:
+                    if market_call_grid is not None:
+                        fig_heat_call_mkt = go.Figure(
+                            data=[
+                                go.Heatmap(
+                                    z=market_call_grid,
+                                    x=K_grid,
+                                    y=T_grid,
+                                    colorscale="Plasma",
+                                    colorbar=dict(title="Prix des Call Marché"),
+                                    zmin=call_zmin,
+                                    zmax=call_zmax,
+                                )
+                            ]
+                        )
+                        st.plotly_chart(fig_heat_call_mkt, use_container_width=True)
+                    else:
+                        st.info("Pas assez de points marché pour la heatmap call.")
 
                 # Description textuelle de ce que l'utilisateur voit sur les heatmaps de calls
                 st.markdown(
@@ -536,25 +646,40 @@ if run_button:
 """
                 )
 
+            # Onglet Puts : IV et prix Carr-Madan côte à côte, puis marché
             with tab_puts:
-                st.plotly_chart(fig_heat_put_cm, use_container_width=True)
-                if market_put_grid is not None:
-                    fig_heat_put_mkt = go.Figure(
-                        data=[
-                            go.Heatmap(
-                                z=market_put_grid,
-                                x=K_grid,
-                                y=T_grid,
-                                colorscale="Plasma",
-                                colorbar=dict(title="Put Marché"),
-                                zmin=put_prices_cm.min(),
-                                zmax=put_prices_cm.max(),
-                            )
-                        ]
-                    )
-                    st.plotly_chart(fig_heat_put_mkt, use_container_width=True)
-                else:
-                    st.info("Pas assez de points marché pour la heatmap put.")
+                st.subheader("Carr-Madan : IV & prix (Puts)")
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.plotly_chart(fig_put_cm, use_container_width=True)
+                with c2:
+                    st.plotly_chart(fig_heat_put_cm, use_container_width=True)
+
+                st.subheader("Marché : IV & prix (Puts)")
+                c3, c4 = st.columns(2)
+                with c3:
+                    if fig_put_market:
+                        st.plotly_chart(fig_put_market, use_container_width=True)
+                    else:
+                        st.info("Pas assez de points marché pour la surface put.")
+                with c4:
+                    if market_put_grid is not None:
+                        fig_heat_put_mkt = go.Figure(
+                            data=[
+                                go.Heatmap(
+                                    z=market_put_grid,
+                                    x=K_grid,
+                                    y=T_grid,
+                                    colorscale="Plasma",
+                                    colorbar=dict(title="Prix des Put Marché"),
+                                    zmin=put_zmin,
+                                    zmax=put_zmax,
+                                )
+                            ]
+                        )
+                        st.plotly_chart(fig_heat_put_mkt, use_container_width=True)
+                    else:
+                        st.info("Pas assez de points marché pour la heatmap put.")
 
                 # Description textuelle de ce que l'utilisateur voit sur les heatmaps de puts
                 st.markdown(
