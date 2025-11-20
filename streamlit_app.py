@@ -322,7 +322,7 @@ if calls_df is not None and puts_df is not None and S0_ref is not None:
             horizontal=True,
         )
         if mode == "Rapide":
-            max_iters = 500
+            max_iters = 200
             learning_rate = 0.01
         elif mode == "Bonne":
             max_iters = 1000
