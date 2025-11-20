@@ -21,7 +21,7 @@ from heston_torch import HestonParams, carr_madan_call_torch
 torch.set_default_dtype(torch.float64)
 DEVICE = torch.device("cpu")
 MIN_IV_MATURITY = 0.1
-CALIB_T_BAND = (0.82, 0.90)
+CALIB_T_BAND = None
 
 st.set_page_config(page_title="🚀 Heston IV Surfaces", layout="wide")
 st.title("🚀 Surface IV Heston : CBOE → Calibration NN → Carr-Madan")
@@ -31,7 +31,6 @@ st.write(
 1️⃣ Téléchargement des options CBOE (données retardées)
 2️⃣ Calibration Heston (NN Carr-Madan) ciblée sur la zone d'analyse
 3️⃣ Surfaces IV Carr-Madan vs Marché + heatmaps de prix
-4️⃣ Reconstruction des surfaces IV à partir des heatmaps
 """
 )
 
@@ -91,6 +90,15 @@ def download_options_cboe(symbol: str, option_type: str) -> tuple[pd.DataFrame, 
     df = pd.DataFrame(rows)
     df = df[df["T"] > MIN_IV_MATURITY]
     return df, spot
+
+
+@st.cache_data(show_spinner=False)
+def load_cboe_data(symbol: str) -> tuple[pd.DataFrame, pd.DataFrame, float]:
+    """Télécharge et met en cache les données CBOE calls/puts + spot moyen."""
+    calls_df, spot_calls = download_options_cboe(symbol, "call")
+    puts_df, spot_puts = download_options_cboe(symbol, "put")
+    S0_ref = float(np.nanmean([spot_calls, spot_puts]))
+    return calls_df, puts_df, S0_ref
 
 
 # ---------------------------------------------------------------------------
@@ -229,183 +237,256 @@ def build_market_price_grid(df, price_col, KK_cm, TT_cm):
     return grid
 
 
-def iv_surface_from_prices(price_grid, option_type):
-    iv_grid = np.full_like(price_grid, np.nan)
-    for i, T_val in enumerate(T_grid):
-        for j, K_val in enumerate(K_grid):
-            iv_grid[i, j] = implied_vol_option(price_grid[i, j], S0_ref, K_val, T_val, rf_rate, option_type)
-    return iv_grid
-
-
 # ---------------------------------------------------------------------------
 # UI
 # ---------------------------------------------------------------------------
 
 st.sidebar.header("⚙️ Configuration de base")
-ticker = st.sidebar.text_input("Ticker", value="SPY")
 rf_rate = st.sidebar.number_input("Taux sans risque (r)", value=0.02, step=0.01, format="%.3f")
 div_yield = st.sidebar.number_input("Dividende (q)", value=0.00, step=0.01, format="%.3f")
 span_mc = st.sidebar.number_input("Span autour de S0 pour les grilles K", value=20.0, min_value=5.0, max_value=100.0, step=5.0)
 n_maturities = 40
+CALIB_T_BAND = None
 
 st.header("⚙️ Paramètres de modélisation")
-col_nn, _ = st.columns(2)
-with col_nn:
-    st.subheader("🎯 Calibration NN Carr-Madan")
-    max_iters = st.number_input("Itérations NN", value=1000, min_value=100, max_value=5000, step=100)
-    learning_rate = st.number_input("Learning rate", value=0.005, min_value=0.0005, max_value=0.05, step=0.0005, format="%.4f")
+ticker = st.text_input("Ticker (sous-jacent)", value="SPY")
 
-run_button = st.button("🚀 Lancer l'analyse", type="primary", use_container_width=True)
+# État persistant pour les données CBOE et la maturité cible
+if "calls_df" not in st.session_state:
+    st.session_state.calls_df = None
+    st.session_state.puts_df = None
+    st.session_state.S0_ref = None
+    st.session_state.calib_T_target = None
+
+# Bouton dédié pour récupérer les données du ticker (dans le panel principal)
+# Couleur différente de celle du bouton d'analyse (qui reste en type="primary")
+fetch_btn = st.button("Récupérer les données du ticker", use_container_width=True)
 st.divider()
 
-if run_button:
+if fetch_btn:
     try:
-        st.info(f"📡 Téléchargement des données CBOE pour {ticker}...")
-        calls_df, spot_calls = download_options_cboe(ticker, "call")
-        puts_df, spot_puts = download_options_cboe(ticker, "put")
-        S0_ref = float(np.nanmean([spot_calls, spot_puts]))
-        st.success(f"✓ {len(calls_df)} calls et {len(puts_df)} puts téléchargés | S0 ≈ {S0_ref:.2f}")
+        calls_df, puts_df, S0_ref = load_cboe_data(ticker)
+        st.session_state.calls_df = calls_df
+        st.session_state.puts_df = puts_df
+        st.session_state.S0_ref = S0_ref
 
-        st.info("🧠 Calibration ciblée...")
-        progress_bar = st.progress(0.0)
-        status_text = st.empty()
-
-        def progress_cb(current: int, total: int) -> None:
-            progress_bar.progress(current / total)
-            status_text.text(f"⏳ Iter {current}/{total}")
-
-        calib_slice = calls_df[
-            (calls_df["T"].round(2).between(*CALIB_T_BAND)) &
-            (calls_df["K"].between(S0_ref - span_mc, S0_ref + span_mc)) &
-            (calls_df["C_mkt"] > 0.05) &
-            (calls_df["iv_market"] > 0)
-        ]
-        if len(calib_slice) < 5:
-            calib_slice = calls_df.copy()
-
-        params_cm = calibrate_heston_nn(
-            calib_slice,
-            r=rf_rate,
-            q=div_yield,
-            max_iters=int(max_iters),
-            lr=learning_rate,
-            spot_override=S0_ref,
-            progress_callback=progress_cb,
-        )
-        progress_bar.empty()
-        status_text.empty()
-
-        params_dict = {
-            "kappa": float(params_cm.kappa.detach()),
-            "theta": float(params_cm.theta.detach()),
-            "sigma": float(params_cm.sigma.detach()),
-            "rho": float(params_cm.rho.detach()),
-            "v0": float(params_cm.v0.detach()),
-        }
-        st.success("✓ Calibration terminée")
-        st.dataframe(pd.Series(params_dict, name="Paramètre").to_frame())
-
-        # ---------------------------------------------------------------
-        st.info("📐 Surfaces analytiques Carr-Madan")
-        K_grid = np.arange(S0_ref - span_mc, S0_ref + span_mc + 1, 1)
-        T_grid = np.linspace(0.1, 2.0, n_maturities)
-        K_grid = np.unique(K_grid)
-        T_grid = np.unique(T_grid)
-        Ks_t = torch.tensor(K_grid, dtype=torch.float64)
-
-        call_prices_cm = np.zeros((len(T_grid), len(K_grid)))
-        put_prices_cm = np.zeros_like(call_prices_cm)
-        for i, T_val in enumerate(T_grid):
-            call_vals = carr_madan_call_torch(S0_ref, rf_rate, div_yield, float(T_val), params_cm, Ks_t)
-            discount = torch.exp(-torch.tensor(rf_rate * T_val, dtype=torch.float64))
-            forward = torch.exp(-torch.tensor(div_yield * T_val, dtype=torch.float64))
-            put_vals = call_vals - S0_ref * forward + Ks_t * discount
-            call_prices_cm[i, :] = call_vals.detach().cpu().numpy()
-            put_prices_cm[i, :] = put_vals.detach().cpu().numpy()
-
-        call_iv_cm = np.zeros_like(call_prices_cm)
-        put_iv_cm = np.zeros_like(put_prices_cm)
-        for i, T_val in enumerate(T_grid):
-            for j, K_val in enumerate(K_grid):
-                call_iv_cm[i, j] = implied_vol_option(call_prices_cm[i, j], S0_ref, K_val, T_val, rf_rate, "call")
-                put_iv_cm[i, j] = implied_vol_option(put_prices_cm[i, j], S0_ref, K_val, T_val, rf_rate, "put")
-
-        KK_cm, TT_cm = np.meshgrid(K_grid, T_grid, indexing="xy")
-        fig_call_cm = go.Figure(data=[go.Surface(x=KK_cm, y=TT_cm, z=call_iv_cm, colorscale='Viridis')])
-        fig_call_cm.update_layout(title=f"IV Surface Calls (Carr-Madan) - {ticker}", scene=dict(xaxis_title='K', yaxis_title='T', zaxis_title='IV'), height=600)
-        fig_put_cm = go.Figure(data=[go.Surface(x=KK_cm, y=TT_cm, z=put_iv_cm, colorscale='Viridis')])
-        fig_put_cm.update_layout(title=f"IV Surface Puts (Carr-Madan) - {ticker}", scene=dict(xaxis_title='K', yaxis_title='T', zaxis_title='IV'), height=600)
-
-        # Surfaces marché (IV recalculée)
-        surf_call_market = build_market_surface(calls_df, "C_mkt", "call", KK_cm, TT_cm)
-        surf_put_market = build_market_surface(puts_df, "P_mkt", "put", KK_cm, TT_cm)
-        fig_call_market = None
-        fig_put_market = None
-        if surf_call_market is not None:
-            fig_call_market = go.Figure(data=[go.Surface(x=KK_cm, y=TT_cm, z=surf_call_market, colorscale='Plasma')])
-            fig_call_market.update_layout(title=f"IV Surface Calls (Marché) - {ticker}", scene=dict(xaxis_title='K', yaxis_title='T', zaxis_title='IV'), height=600)
-        if surf_put_market is not None:
-            fig_put_market = go.Figure(data=[go.Surface(x=KK_cm, y=TT_cm, z=surf_put_market, colorscale='Plasma')])
-            fig_put_market.update_layout(title=f"IV Surface Puts (Marché) - {ticker}", scene=dict(xaxis_title='K', yaxis_title='T', zaxis_title='IV'), height=600)
-
-        st.subheader("🌊 IV Surfaces Carr-Madan vs Marché")
-        col_call, col_put = st.columns(2)
-        with col_call:
-            st.plotly_chart(fig_call_cm, use_container_width=True)
-            if fig_call_market:
-                st.plotly_chart(fig_call_market, use_container_width=True)
-            else:
-                st.info("Pas assez de points marché pour la surface call.")
-        with col_put:
-            st.plotly_chart(fig_put_cm, use_container_width=True)
-            if fig_put_market:
-                st.plotly_chart(fig_put_market, use_container_width=True)
-            else:
-                st.info("Pas assez de points marché pour la surface put.")
-
-        # Heatmaps prix (Carr-Madan & Marché)
-        market_call_grid = build_market_price_grid(calls_df, "C_mkt", KK_cm, TT_cm)
-        market_put_grid = build_market_price_grid(puts_df, "P_mkt", KK_cm, TT_cm)
-
-        st.subheader("🔥 Heatmaps Prix (Carr-Madan vs Marché)")
-        fig_heat_call_cm = go.Figure(data=[go.Heatmap(z=call_prices_cm, x=K_grid, y=T_grid, colorscale='Viridis', colorbar=dict(title='Call CM'))])
-        fig_heat_put_cm = go.Figure(data=[go.Heatmap(z=put_prices_cm, x=K_grid, y=T_grid, colorscale='Viridis', colorbar=dict(title='Put CM'))])
-        st.plotly_chart(fig_heat_call_cm, use_container_width=True)
-        st.plotly_chart(fig_heat_put_cm, use_container_width=True)
-        if market_call_grid is not None:
-            fig_heat_call_mkt = go.Figure(data=[go.Heatmap(z=market_call_grid, x=K_grid, y=T_grid, colorscale='Plasma', colorbar=dict(title='Call Marché'), zmin=call_prices_cm.min(), zmax=call_prices_cm.max())])
-            st.plotly_chart(fig_heat_call_mkt, use_container_width=True)
-        if market_put_grid is not None:
-            fig_heat_put_mkt = go.Figure(data=[go.Heatmap(z=market_put_grid, x=K_grid, y=T_grid, colorscale='Plasma', colorbar=dict(title='Put Marché'), zmin=put_prices_cm.min(), zmax=put_prices_cm.max())])
-            st.plotly_chart(fig_heat_put_mkt, use_container_width=True)
-
-        # Surfaces IV depuis les heatmaps prix
-        st.subheader("🔄 IV surfaces recalculées depuis les heatmaps")
-        call_iv_from_prices = iv_surface_from_prices(call_prices_cm, 'call')
-        put_iv_from_prices = iv_surface_from_prices(put_prices_cm, 'put')
-        fig_call_iv_heat = go.Figure(data=[go.Surface(x=KK_cm, y=TT_cm, z=call_iv_from_prices, colorscale='Viridis')])
-        fig_call_iv_heat.update_layout(title=f"IV Carr-Madan (depuis heatmap prix) - {ticker}", scene=dict(xaxis_title='K', yaxis_title='T', zaxis_title='IV'), height=600)
-        st.plotly_chart(fig_call_iv_heat, use_container_width=True)
-        fig_put_iv_heat = go.Figure(data=[go.Surface(x=KK_cm, y=TT_cm, z=put_iv_from_prices, colorscale='Viridis')])
-        fig_put_iv_heat.update_layout(title=f"IV Carr-Madan Puts (depuis heatmap prix) - {ticker}", scene=dict(xaxis_title='K', yaxis_title='T', zaxis_title='IV'), height=600)
-        st.plotly_chart(fig_put_iv_heat, use_container_width=True)
-
-        if market_call_grid is not None:
-            call_iv_market_surface = iv_surface_from_prices(market_call_grid, 'call')
-            fig_call_iv_market_heat = go.Figure(data=[go.Surface(x=KK_cm, y=TT_cm, z=call_iv_market_surface, colorscale='Plasma')])
-            fig_call_iv_market_heat.update_layout(title=f"IV Marché (depuis heatmap prix) - Calls {ticker}", scene=dict(xaxis_title='K', yaxis_title='T', zaxis_title='IV'), height=600)
-            st.plotly_chart(fig_call_iv_market_heat, use_container_width=True)
-
-        if market_put_grid is not None:
-            put_iv_market_surface = iv_surface_from_prices(market_put_grid, 'put')
-            fig_put_iv_market_heat = go.Figure(data=[go.Surface(x=KK_cm, y=TT_cm, z=put_iv_market_surface, colorscale='Plasma')])
-            fig_put_iv_market_heat.update_layout(title=f"IV Marché (depuis heatmap prix) - Puts {ticker}", scene=dict(xaxis_title='K', yaxis_title='T', zaxis_title='IV'), height=600)
-            st.plotly_chart(fig_put_iv_market_heat, use_container_width=True)
-
-        st.balloons()
-        st.success("🎉 Analyse terminée")
-
+        # Pastilles de statut sous le bouton une fois le téléchargement terminé
+        st.info(f"📡 Données CBOE chargées pour {ticker} (cache)")
+        st.success(f"{len(calls_df)} calls, {len(puts_df)} puts | S0 ≈ {S0_ref:.2f}")
     except Exception as exc:
-        st.error(f"❌ Erreur : {exc}")
-        import traceback
-        st.code(traceback.format_exc())
+        st.error(f"❌ Erreur lors du téléchargement des données CBOE : {exc}")
+
+# Récupération de l'état courant
+calls_df = st.session_state.calls_df
+puts_df = st.session_state.puts_df
+S0_ref = st.session_state.S0_ref
+calib_T_target = st.session_state.calib_T_target
+
+# Partie calibration NN (cachée tant que les données n'ont pas été récupérées)
+if calls_df is not None and puts_df is not None and S0_ref is not None:
+    col_nn, _ = st.columns(2)
+    with col_nn:
+        st.subheader("🎯 Calibration NN Carr-Madan")
+        max_iters = st.number_input(
+            "Itérations NN",
+            value=500,
+            min_value=100,
+            max_value=5000,
+            step=100,
+            key="max_iters",
+        )
+        learning_rate = st.number_input(
+            "Learning rate",
+            value=0.01,
+            min_value=0.0005,
+            max_value=0.05,
+            step=0.0005,
+            format="%.3f",
+            key="learning_rate",
+        )
+        calib_T_band = st.number_input(
+            "Largeur bande T (±)",
+            value=0.04,
+            min_value=0.01,
+            max_value=0.5,
+            step=0.01,
+            format="%.2f",
+            key="calib_T_band",
+        )
+
+        # Choix de la maturité cible directement dans le panel principal
+        unique_T = sorted(calls_df["T"].round(2).unique())
+        if unique_T:
+            calib_T_target = st.selectbox(
+                "Maturité T cible pour la calibration (Time to Maturity)",
+                unique_T,
+                index=unique_T.index(calib_T_target) if calib_T_target in unique_T and calib_T_target is not None else 0,
+                format_func=lambda x: f"{x:.2f}",
+            )
+            st.session_state.calib_T_target = calib_T_target
+        else:
+            st.warning("Pas de maturités disponibles dans les données CBOE.")
+            calib_T_target = None
+
+    if calib_T_target is not None:
+        CALIB_T_BAND = (
+            max(MIN_IV_MATURITY, calib_T_target - calib_T_band),
+            calib_T_target + calib_T_band,
+        )
+    else:
+        CALIB_T_BAND = None
+else:
+    CALIB_T_BAND = None
+
+# Bouton d'analyse NN : on ne l'affiche que si les données ont été fetch avec succès
+run_button = False
+if calls_df is not None and puts_df is not None and S0_ref is not None:
+    run_button = st.button("🚀 Lancer l'analyse", type="primary", use_container_width=True)
+    st.divider()
+
+if run_button:
+    # Vérifications préalables : données et T cible doivent être disponibles
+    if calls_df is None or puts_df is None or S0_ref is None:
+        st.error("Veuillez d'abord cliquer sur « Récupérer les données du ticker ».")
+    elif calib_T_target is None or CALIB_T_BAND is None:
+        st.error("Veuillez choisir une maturité T cible après avoir chargé les données.")
+    else:
+        try:
+            # Rappel visuel des infos marché sous le bouton d'analyse
+            st.info(f"📡 Données CBOE chargées pour {ticker} (cache)")
+            st.success(f"{len(calls_df)} calls, {len(puts_df)} puts | S0 ≈ {S0_ref:.2f}")
+            st.write(f"Maturité T cible pour la calibration (Time to Maturity) : {calib_T_target:.2f} ans")
+
+            st.info("🧠 Calibration ciblée...")
+            progress_bar = st.progress(0.0)
+            status_text = st.empty()
+
+            def progress_cb(current: int, total: int) -> None:
+                progress_bar.progress(current / total)
+                status_text.text(f"⏳ Iter {current}/{total}")
+
+            calib_slice = calls_df[
+                (calls_df["T"].round(2).between(*CALIB_T_BAND)) &
+                (calls_df["K"].between(S0_ref - span_mc, S0_ref + span_mc)) &
+                (calls_df["C_mkt"] > 0.05) &
+                (calls_df["iv_market"] > 0)
+            ]
+            if len(calib_slice) < 5:
+                calib_slice = calls_df.copy()
+
+            params_cm = calibrate_heston_nn(
+                calib_slice,
+                r=rf_rate,
+                q=div_yield,
+                max_iters=int(max_iters),
+                lr=learning_rate,
+                spot_override=S0_ref,
+                progress_callback=progress_cb,
+            )
+            progress_bar.empty()
+            status_text.empty()
+
+            params_dict = {
+                "kappa": float(params_cm.kappa.detach()),
+                "theta": float(params_cm.theta.detach()),
+                "sigma": float(params_cm.sigma.detach()),
+                "rho": float(params_cm.rho.detach()),
+                "v0": float(params_cm.v0.detach()),
+            }
+            st.success("✓ Calibration terminée")
+            st.dataframe(pd.Series(params_dict, name="Paramètre").to_frame())
+
+            # ---------------------------------------------------------------
+            st.info("📐 Surfaces analytiques Carr-Madan")
+            K_grid = np.arange(S0_ref - span_mc, S0_ref + span_mc + 1, 1)
+            t_min = max(MIN_IV_MATURITY, CALIB_T_BAND[0])
+            t_max = max(t_min + 0.05, min(2.0, CALIB_T_BAND[1]))
+            T_grid = np.linspace(t_min, t_max, n_maturities)
+            K_grid = np.unique(K_grid)
+            T_grid = np.unique(T_grid)
+            Ks_t = torch.tensor(K_grid, dtype=torch.float64)
+
+            call_prices_cm = np.zeros((len(T_grid), len(K_grid)))
+            put_prices_cm = np.zeros_like(call_prices_cm)
+            for i, T_val in enumerate(T_grid):
+                call_vals = carr_madan_call_torch(S0_ref, rf_rate, div_yield, float(T_val), params_cm, Ks_t)
+                discount = torch.exp(-torch.tensor(rf_rate * T_val, dtype=torch.float64))
+                forward = torch.exp(-torch.tensor(div_yield * T_val, dtype=torch.float64))
+                put_vals = call_vals - S0_ref * forward + Ks_t * discount
+                call_prices_cm[i, :] = call_vals.detach().cpu().numpy()
+                put_prices_cm[i, :] = put_vals.detach().cpu().numpy()
+
+            call_iv_cm = np.zeros_like(call_prices_cm)
+            put_iv_cm = np.zeros_like(put_prices_cm)
+            for i, T_val in enumerate(T_grid):
+                for j, K_val in enumerate(K_grid):
+                    call_iv_cm[i, j] = implied_vol_option(call_prices_cm[i, j], S0_ref, K_val, T_val, rf_rate, "call")
+                    put_iv_cm[i, j] = implied_vol_option(put_prices_cm[i, j], S0_ref, K_val, T_val, rf_rate, "put")
+
+            KK_cm, TT_cm = np.meshgrid(K_grid, T_grid, indexing="xy")
+            fig_call_cm = go.Figure(data=[go.Surface(x=KK_cm, y=TT_cm, z=call_iv_cm, colorscale='Viridis')])
+            fig_call_cm.update_layout(title=f"IV Surface Calls (Carr-Madan) - {ticker}", scene=dict(xaxis_title='K', yaxis_title='T', zaxis_title='IV'), height=600)
+            fig_put_cm = go.Figure(data=[go.Surface(x=KK_cm, y=TT_cm, z=put_iv_cm, colorscale='Viridis')])
+            fig_put_cm.update_layout(title=f"IV Surface Puts (Carr-Madan) - {ticker}", scene=dict(xaxis_title='K', yaxis_title='T', zaxis_title='IV'), height=600)
+
+            # Surfaces marché (IV recalculée)
+            surf_call_market = build_market_surface(calls_df, "C_mkt", "call", KK_cm, TT_cm)
+            surf_put_market = build_market_surface(puts_df, "P_mkt", "put", KK_cm, TT_cm)
+            fig_call_market = None
+            fig_put_market = None
+            if surf_call_market is not None:
+                fig_call_market = go.Figure(data=[go.Surface(x=KK_cm, y=TT_cm, z=surf_call_market, colorscale='Plasma')])
+                fig_call_market.update_layout(title=f"IV Surface Calls (Marché) - {ticker}", scene=dict(xaxis_title='K', yaxis_title='T', zaxis_title='IV'), height=600)
+            if surf_put_market is not None:
+                fig_put_market = go.Figure(data=[go.Surface(x=KK_cm, y=TT_cm, z=surf_put_market, colorscale='Plasma')])
+                fig_put_market.update_layout(title=f"IV Surface Puts (Marché) - {ticker}", scene=dict(xaxis_title='K', yaxis_title='T', zaxis_title='IV'), height=600)
+
+            tab_calls, tab_puts = st.tabs(["📈 Calls", "📉 Puts"])
+
+            with tab_calls:
+                st.subheader("🌊 IV Surfaces Calls")
+                st.plotly_chart(fig_call_cm, use_container_width=True)
+                if fig_call_market:
+                    st.plotly_chart(fig_call_market, use_container_width=True)
+                else:
+                    st.info("Pas assez de points marché pour la surface call.")
+
+            with tab_puts:
+                st.subheader("🌊 IV Surfaces Puts")
+                st.plotly_chart(fig_put_cm, use_container_width=True)
+                if fig_put_market:
+                    st.plotly_chart(fig_put_market, use_container_width=True)
+                else:
+                    st.info("Pas assez de points marché pour la surface put.")
+
+            # Heatmaps prix (Carr-Madan & Marché)
+            market_call_grid = build_market_price_grid(calls_df, "C_mkt", KK_cm, TT_cm)
+            market_put_grid = build_market_price_grid(puts_df, "P_mkt", KK_cm, TT_cm)
+
+            st.subheader("🔥 Heatmaps de prix (Carr-Madan vs Marché)")
+            fig_heat_call_cm = go.Figure(data=[go.Heatmap(z=call_prices_cm, x=K_grid, y=T_grid, colorscale='Viridis', colorbar=dict(title='Call CM'))])
+            fig_heat_put_cm = go.Figure(data=[go.Heatmap(z=put_prices_cm, x=K_grid, y=T_grid, colorscale='Viridis', colorbar=dict(title='Put CM'))])
+
+            with tab_calls:
+                st.plotly_chart(fig_heat_call_cm, use_container_width=True)
+                if market_call_grid is not None:
+                    fig_heat_call_mkt = go.Figure(data=[go.Heatmap(z=market_call_grid, x=K_grid, y=T_grid, colorscale='Plasma', colorbar=dict(title='Call Marché'), zmin=call_prices_cm.min(), zmax=call_prices_cm.max())])
+                    st.plotly_chart(fig_heat_call_mkt, use_container_width=True)
+                else:
+                    st.info("Pas assez de points marché pour la heatmap call.")
+
+            with tab_puts:
+                st.plotly_chart(fig_heat_put_cm, use_container_width=True)
+                if market_put_grid is not None:
+                    fig_heat_put_mkt = go.Figure(data=[go.Heatmap(z=market_put_grid, x=K_grid, y=T_grid, colorscale='Plasma', colorbar=dict(title='Put Marché'), zmin=put_prices_cm.min(), zmax=put_prices_cm.max())])
+                    st.plotly_chart(fig_heat_put_mkt, use_container_width=True)
+                else:
+                    st.info("Pas assez de points marché pour la heatmap put.")
+
+            st.balloons()
+            st.success("🎉 Analyse terminée")
+
+        except Exception as exc:
+            st.error(f"❌ Erreur : {exc}")
+            import traceback
+            st.code(traceback.format_exc())
