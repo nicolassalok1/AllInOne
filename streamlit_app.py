@@ -249,7 +249,7 @@ span_mc = st.sidebar.number_input("Span autour de S0 pour les grilles K", value=
 n_maturities = 40
 CALIB_T_BAND = None
 
-st.header("⚙️ Paramètres de modélisation")
+st.header("Ticker et récupération des données CBOE")
 ticker = st.text_input("Ticker (sous-jacent)", value="SPY")
 
 # État persistant pour les données CBOE et la maturité cible
